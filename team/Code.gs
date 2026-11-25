@@ -6,9 +6,10 @@ function doGet() {
 function start(token) {
   const db = database_();
   const actor = principal_(db, undefined, token);
-  const factories = factoriesFor_(db, actor).map(row => ({id:row[0], name:row[1]}));
+  const deleted = deletedCatalogIds_(db, 'FACTORIES');
+  const factories = factoriesFor_(db, actor, deleted).map(row => ({id:row[0], name:row[1]}));
   return {name:actor.name, role:actor.role, factories,
-    ...(actor.role === 'ADMIN' ? {archivedFactories:rows_(db, 'FACTORIES').filter(row => !enabled_(row[2]))
+    ...(actor.role === 'ADMIN' ? {archivedFactories:rows_(db, 'FACTORIES').filter(row => deleted.has(row[0]))
       .map(row => ({id:row[0], name:row[1]}))} : {})};
 }
 
@@ -292,8 +293,16 @@ function signOut(token) {
   });
 }
 
-function factoriesFor_(db, user) {
-  return rows_(db, 'FACTORIES').filter(row => enabled_(row[2]) &&
+const DELETION_PREFIX = Object.freeze({FACTORIES:'FACTORY_DELETED_', ITEMS:'ITEM_DELETED_', USERS:'USER_DELETED_'});
+
+function deletedCatalogIds_(db, kind) {
+  const prefix = DELETION_PREFIX[kind];
+  return new Set(rows_(db, 'SETTINGS').filter(row => String(row[0]).startsWith(prefix) && enabled_(row[1]))
+    .map(row => String(row[0]).slice(prefix.length)));
+}
+
+function factoriesFor_(db, user, deleted = deletedCatalogIds_(db, 'FACTORIES')) {
+  return rows_(db, 'FACTORIES').filter(row => !deleted.has(row[0]) &&
     (!user.factories || user.factories.has(row[0])));
 }
 
@@ -311,14 +320,14 @@ function saveCatalog(kind, input, token) {
     let index = entries.findIndex(row => row[0] === input.id);
     if (kind !== 'STOCK' && input.id && index < 0) throw new Error('Record unavailable.');
     const old = entries[index];
+    if (old && Object.hasOwn(DELETION_PREFIX, kind) && deletedCatalogIds_(db, kind).has(old[0])) {
+      throw new Error('Record unavailable.');
+    }
     const id = old ? old[0] : id_();
     let row;
     const requests = [];
     if (kind === 'FACTORIES') {
-      if (old && rows_(db, 'SETTINGS').some(setting => setting[0] === 'FACTORY_DELETED_' + id && enabled_(setting[1]))) {
-        throw new Error('Record unavailable.');
-      }
-      row = [id, requiredText_(input.name), input.active === true, old?.[3] || timestamp, timestamp];
+      row = [id, requiredText_(input.name), true, old?.[3] || timestamp, timestamp];
       const change = forecastSetting_(db, 'FACTORY_WORKERS_' + id, input.workerCount, actor.id, timestamp, true);
       if (change) requests.push(change);
     } else if (kind === 'ITEMS') {
@@ -348,14 +357,15 @@ function saveCatalog(kind, input, token) {
       const image = input.photo ? storeItemImage_(input.photo) : old?.[6] || '';
       row = [id, name, old?.[2] || '', unit,
         input.pack, input.decimal === true, image, old?.[7] || '', old?.[8] ?? '',
-        input.active === true, old?.[10] || timestamp, timestamp];
+        input.active === undefined ? (!old || enabled_(old[9])) : input.active === true, old?.[10] || timestamp, timestamp];
     } else if (kind === 'USERS') {
       const username = username_(input.username);
       if (!username) throw new Error('Enter a username.');
       if (!['WORKER', 'SUPERVISOR', 'ADMIN'].includes(input.role) || (old && !old[3] && old[4] === 'ADMIN') || id === actor.id) {
         throw new Error('Choose a role. You cannot edit your own administrator account.');
       }
-      if (entries.some(other => other[0] !== id && username_(other[2]) === username)) {
+      const deletedUsers = deletedCatalogIds_(db, 'USERS');
+      if (entries.some(other => other[0] !== id && !deletedUsers.has(other[0]) && username_(other[2]) === username)) {
         throw new Error('Username already exists. Select that user to edit or reset their password.');
       }
       if (input.passwordProof !== undefined && !passwordProof_(input.passwordProof)) {
@@ -404,16 +414,17 @@ function saveCatalog(kind, input, token) {
 
 function catalog(token) {
   const db = database_();
-  principal_(db, ['ADMIN'], token);
+  const actor = principal_(db, ['ADMIN'], token);
   const assignments = rows_(db, 'USER_FACTORIES');
   const settings = new Map(rows_(db, 'SETTINGS').map(row => [row[0], row[1]]));
   return {
     FACTORIES: rows_(db, 'FACTORIES').filter(row => !enabled_(settings.get('FACTORY_DELETED_' + row[0]))).map(row => ({id: row[0], name: row[1],
-      workerCount: settings.get('FACTORY_WORKERS_' + row[0]) ?? '', active: enabled_(row[2])})),
-    ITEMS: rows_(db, 'ITEMS').map(row => ({id: row[0], name: row[1], unit: row[3],
+      workerCount: settings.get('FACTORY_WORKERS_' + row[0]) ?? ''})),
+    ITEMS: rows_(db, 'ITEMS').filter(row => !enabled_(settings.get('ITEM_DELETED_' + row[0]))).map(row => ({id: row[0], name: row[1], unit: row[3],
       pack: row[4], itemCode: settings.get('ITEM_CODE_' + row[0]) || '', minimum: settings.get('ITEM_MINIMUM_' + row[0]) ?? '', decimal: enabled_(row[5]),
       usagePerWorker: settings.get('ITEM_USAGE_PER_WORKER_' + row[0]) ?? '', hasPhoto: Boolean(row[6]), active: enabled_(row[9])})),
-    USERS: rows_(db, 'USERS').filter(row => (row[4] !== 'ADMIN' || Boolean(row[3]))).map(row => ({id: row[0], name: row[1], username: row[2],
+    USERS: rows_(db, 'USERS').filter(row => row[0] !== actor.id && (row[4] !== 'ADMIN' || Boolean(row[3])) &&
+      !enabled_(settings.get('USER_DELETED_' + row[0]))).map(row => ({id: row[0], name: row[1], username: row[2],
       role: row[4], active: enabled_(row[5]), factories: assignments.filter(a => a[0] === row[0]).map(a => a[1])})),
     STOCK: rows_(db, 'STOCK').map(row => ({factory: row[0], item: row[1], active: enabled_(row[8]), estimatedDaily: row[3], quantity:row[2]}))
   };
@@ -850,9 +861,7 @@ function saveInterfaceText(changes, token) {
 
 // Deactivation keeps inventory keys, assignments and history recoverable.
 function deleteCatalog(kind, id, token) {
-  if (!['FACTORIES', 'ITEMS'].includes(kind) || typeof id !== 'string' || !id) {
-    throw new Error('Invalid request.');
-  }
+  if (!Object.hasOwn(DELETION_PREFIX, kind) || typeof id !== 'string' || !id) throw new Error('Invalid request.');
   return locked_(() => {
     const db = database_();
     const actor = principal_(db, ['ADMIN'], token);
@@ -860,23 +869,25 @@ function deleteCatalog(kind, id, token) {
     const index = rows.findIndex(row => row[0] === id);
     if (index < 0) throw new Error('Record unavailable.');
     const row = rows[index];
-    const activeColumn = kind === 'FACTORIES' ? 2 : 9;
+    if (kind === 'USERS' && (actor.id === id || (row[4] === 'ADMIN' && !row[3]))) {
+      throw new Error('You cannot delete your own account or the Google owner account.');
+    }
+    const [activeColumn, updatedColumn] = {FACTORIES:[2,4], ITEMS:[9,11], USERS:[5,7]}[kind];
     const requests = [];
     const timestamp = now_();
     if (enabled_(row[activeColumn])) {
       row[activeColumn] = false;
-      row[kind === 'FACTORIES' ? 4 : 11] = timestamp;
+      row[updatedColumn] = timestamp;
       requests.push(update_(db, kind, index + 2, row));
     }
-    if (kind === 'FACTORIES') {
-      const settings = rows_(db, 'SETTINGS');
-      const key = 'FACTORY_DELETED_' + id;
-      const position = settings.findIndex(setting => setting[0] === key);
-      if (position < 0 || !enabled_(settings[position][1])) {
-        requests.push(upsert_(db, 'SETTINGS', position, [key, true, actor.id, timestamp]));
-      }
+    const settings = rows_(db, 'SETTINGS');
+    const key = DELETION_PREFIX[kind] + id;
+    const position = settings.findIndex(setting => setting[0] === key);
+    if (position < 0 || !enabled_(settings[position][1])) {
+      requests.push(upsert_(db, 'SETTINGS', position, [key, true, actor.id, timestamp]));
     }
     if (requests.length) commit_(db, requests);
+    if (kind === 'USERS') properties_().deleteProperty('SESSION_' + id);
     return true;
   });
 }

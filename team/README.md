@@ -31,7 +31,7 @@ Use **Settings → Interface text** to change common menu labels, buttons, headi
 
 ### Delete items, factories and records
 
-In **Settings → Items** or **Settings → Factories**, select an active entry and click **Delete item** or **Delete factory**. The entry disappears from active lists while its balances and history remain. For an inactive item, check **Active** to restore it. Deleting a factory removes it from Settings and leaves its history available under Summary.
+In **Settings → Items** or **Settings → Factories**, select an entry and click **Delete item** or **Delete factory**. In **Settings → User accounts**, choose **Delete account**. Deleted entries disappear from Settings while their movement history remains. Deleting an account closes its session immediately. All factories are selectable until deleted, and deleted factories remain available in Summary.
 
 In **Summary → Recent movements**, choose **Delete record** beside the entry. An administrator-only correction reverses the stock movement once, marks the original as deleted and retains both records for audit. A receipt or opening balance cannot be reversed if doing so would make the current balance negative.
 
@@ -48,3 +48,6 @@ To generate live recommendations immediately, save a worker count in **Settings 
 - **Stock In / Out** records the signed-in person, factory, quantity and one required proof photo per submission. Stock In also requires the receiving password set by an administrator under **Settings → Company**. Set this password before trying Stock In. Supervisors can use these features for assigned factories. Workers can submit Stock Out and see their own history; the app keeps balances and average usage private.
 - **Summary** shows balances and all-time received and used totals for the selected factory, separated by unit. Recent movements show the credited person and provide access to the proof photo and the administrator's correction action. An administrator can select inactive factories to see historical data.
 - **Settings** contains User accounts, Factories, Items, Interface text and Company. An administrator can create username/password accounts with the Admin, Supervisor or Worker role. The original Google-owner administrator is retained. Company logo and proof photos use the private Drive folder and require the owner's existing photo authorization.
+
+
+**Items** shows the item code, name, unit and photo, with the assigned factories and each factory’s current quantity. Existing balances are adjusted through Stock In / Out. Minimum stock, pack size and usage estimates are in **Stock alerts and buying estimates**.

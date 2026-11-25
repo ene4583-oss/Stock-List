@@ -186,6 +186,7 @@ function failure(error) {
     'Check the factory assignments.', 'Check the factory assignments and daily usage estimates.',
     'Enter a whole number of workers, or leave it blank.',
     'Enter a valid daily usage per worker, or leave it blank.',
+    'You cannot delete your own account or the Google owner account.',
     'Record unavailable.', 'This record cannot be deleted.',
     'Delete would make stock negative. Check later stock movements first.',
     'Delete would exceed the stock limit.',
@@ -910,14 +911,14 @@ function renderCatalog(data) {
     picker.append(new Option('New', ''));
     for (const [index, row] of data[kind].entries()) {
       const description = kind === 'USERS' ? row.username : row.name;
-      picker.append(new Option(description + (row.active ? '' : ' (inactive)'), String(index)));
+      picker.append(new Option(description + (row.active === false ? ' (inactive)' : ''), String(index)));
     }
     function edit() {
       const row = picker.value === '' ? {} : data[kind][Number(picker.value)];
       const fields = {};
       const itemAssignments = [];
       const form = el('form');
-      function field(key, label, type, initial, options = []) {
+      function field(key, label, type, initial, options = [], container = form) {
         const input = el(type === 'select' ? 'select' : 'input');
         if (type === 'select') options.forEach(([id, name]) => input.append(new Option(name, id)));
         else input.type = type;
@@ -926,9 +927,9 @@ function renderCatalog(data) {
         fields[key] = input;
         const wrapper = el('label', label);
         wrapper.append(input);
-        form.append(wrapper);
+        container.append(wrapper);
       }
-      if (kind !== 'USERS') field('name','Name','text',row.name);
+      if (kind === 'FACTORIES') field('name','Name','text',row.name);
       if (kind === 'FACTORIES') {
         field('workerCount','Number of workers','number',row.workerCount);
         fields.workerCount.min = '0';
@@ -938,30 +939,35 @@ function renderCatalog(data) {
       }
       if (kind === 'ITEMS') {
         field('itemCode','Item code','text',row.itemCode);
-        field('unit','Unit (e.g. roll, bottle)','text',row.unit);
-        field('minimum','Minimum stock','number',row.minimum);
+        field('name','Item name','text',row.name);
+        field('unit','Unit','text',row.unit);
+        fields.name.required = fields.unit.required = true;
+        fields.unit.placeholder = 'e.g. roll';
+        field('photo',row.hasPhoto ? 'Replace photo' : 'Upload photo','file','');
+        fields.photo.accept = 'image/*';
+        if (row.hasPhoto) form.append(product(row.name, '', productIcon(row.name), {...row, factory:''}));
+
+        const planning = el('details', '', 'card');
+        planning.append(el('summary','Stock alerts and buying estimates'));
+        field('minimum','Minimum stock','number',row.minimum,[],planning);
         fields.minimum.min = '0';
         fields.minimum.step = 'any';
-        field('pack','Pack size','number',row.pack ?? 1);
+        field('pack','Pack size','number',row.pack ?? 1,[],planning);
         fields.pack.step = 'any';
-        field('decimal','Allow decimals','checkbox',row.decimal);
-        field('usagePerWorker','Estimated units per worker per day','number',row.usagePerWorker);
+        field('decimal','Allow decimals','checkbox',row.decimal,[],planning);
+        field('usagePerWorker','Estimated units per worker per day','number',row.usagePerWorker,[],planning);
         fields.usagePerWorker.min = '0';
         fields.usagePerWorker.max = '1000000';
         fields.usagePerWorker.step = 'any';
         fields.usagePerWorker.placeholder = 'e.g. 0.2';
-        form.append(el('p', 'Fill this in to use worker counts for this item. Leave it blank to use usage history or factory estimates.', 'muted'));
-        field('photo', row.hasPhoto ? 'Replace photo' : 'Upload photo', 'file', '');
-        fields.photo.accept = 'image/*';
-        if (row.hasPhoto) form.append(product(row.name, 'Current photo', productIcon(row.name), {...row, factory:''}));
-        form.append(el('h3', 'Assigned factories', 'section-title'),
-          el('p', 'Select factories. Units / day is the whole factory estimate when worker-based usage and history are unavailable.', 'muted'));
-        const factories = data.FACTORIES.filter(entry => entry.active);
-        if (!factories.length) form.append(el('p', 'Create an active factory under Factories first.', 'muted'));
-        factories.forEach(entry => {
+        if (row.active === false) field('active','Restore inactive item','checkbox',false,[],planning);
+
+        form.append(el('h3','Assigned factories','section-title'));
+        if (!data.FACTORIES.length) form.append(el('p','Create a factory first.','muted'));
+        for (const entry of data.FACTORIES) {
           const existing = data.STOCK.find(stock => stock.item === row.id && stock.factory === entry.id);
-          const line = el('div', '', 'assignment');
-          const label = el('label', entry.name);
+          const line = el('div', '', 'item');
+          const factoryLabel = el('label', entry.name);
           const assigned = el('input');
           const daily = el('input');
           assigned.type = 'checkbox';
@@ -969,17 +975,19 @@ function renderCatalog(data) {
           daily.type = 'number';
           daily.min = '0';
           daily.step = 'any';
-          daily.placeholder = 'Units / day';
           daily.value = existing?.estimatedDaily ?? '';
           daily.disabled = !assigned.checked;
-          daily.setAttribute('aria-label', entry.name + ' estimated units per day');
           assigned.onchange = () => { daily.disabled = !assigned.checked; };
-          label.prepend(assigned);
-          if (existing) label.append(el('small', 'In stock: ' + displayQuantity(existing.quantity,row.unit)));
-          line.append(label, daily);
+          factoryLabel.prepend(assigned);
+          const balance = el('small','In stock: ' + displayQuantity(existing?.quantity ?? 0,row.unit));
+          line.append(factoryLabel,balance);
           form.append(line);
+          const estimateLabel = el('label', entry.name + ' · Estimated units per day');
+          estimateLabel.append(daily);
+          planning.append(estimateLabel);
           itemAssignments.push({factory:entry.id, assigned, daily});
-        });
+        }
+        form.append(planning);
       }
       if (kind === 'USERS') {
         field('username','Username','text',row.username);
@@ -992,21 +1000,21 @@ function renderCatalog(data) {
         fields.password.required = !row.id;
         if (row.id) form.append(el('p', 'Leave the password blank to keep it. Enter a new password if you change the username.', 'muted'));
         field('role','Role','select',row.role || 'WORKER',[['WORKER','Worker'],['SUPERVISOR','Supervisor'],['ADMIN','Admin']]);
-        const activeFactories = data.FACTORIES.filter(f => f.active);
+        const activeFactories = data.FACTORIES;
         form.append(el('h3', 'Assigned factories', 'section-title'));
-        if (!activeFactories.length) form.append(el('p', 'Create an active factory under Factories first.', 'muted'));
+        if (!activeFactories.length) form.append(el('p', 'Create a factory first.', 'muted'));
         for (const f of activeFactories) {
           field('factory:' + f.id, f.name, 'checkbox', row.factories?.includes(f.id));
         }
       }
-      field('active','Active','checkbox',row.active ?? true);
+      if (kind === 'USERS') field('active','Active','checkbox',row.active ?? true);
       const save = el('button',label('save','Save'),'primary');
       const controls = el('div', '', 'actions');
       controls.append(save);
-      if (row.id && kind !== 'USERS') {
-        const noun = kind === 'ITEMS' ? 'item' : 'factory';
+      if (row.id) {
+        const noun = {ITEMS:'item', FACTORIES:'factory', USERS:'account'}[kind];
         const remove = button('Delete ' + noun, async () => {
-          if (!window.confirm('Delete ' + row.name + ' from active lists? Its history will be kept.')) return;
+          if (!window.confirm('Delete ' + (row.username || row.name) + '? Previous records will be kept.')) return;
           await removeEntry(remove, 'deleteCatalog', [kind, row.id], 'Manage');
         }, 'danger');
         controls.append(remove);
