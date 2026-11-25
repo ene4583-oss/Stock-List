@@ -183,8 +183,7 @@ function setupDatabase() {
 }
 
 function username_(value) {
-  const name = typeof value === 'string' ? value.trim().toLowerCase() : '';
-  return /^[a-z0-9][a-z0-9._-]{2,39}$/.test(name) ? name : '';
+  return typeof value === 'string' ? value.normalize('NFKC').trim().toLowerCase() : '';
 }
 
 function mac_(value) {
@@ -195,6 +194,19 @@ function mac_(value) {
 
 function credential_(id, password) {
   return mac_('password|' + id + '|' + password);
+}
+
+// Public deployment salt. The signing key remains in Script Properties.
+function passwordSalt() {
+  return mac_('smart-stock-password-salt-v2');
+}
+
+function passwordProof_(value) {
+  return typeof value === 'string' && /^v2:[0-9a-f]{64}$/.test(value);
+}
+
+function savedPassword_(id, proof) {
+  return 'v2:' + mac_('password-v2|' + id + '|' + proof);
 }
 
 function same_(left, right) {
@@ -244,20 +256,24 @@ function throttle_(key, limit, minutes) {
   properties.setProperty(key, until + '|' + (count + 1));
 }
 
-function signIn(username, password) {
+function signIn(username, proof, legacyPassword) {
   const name = username_(username);
-  if (!name || typeof password !== 'string' || !/^[0-9a-f]{32}$/.test(password)) {
-    throw new Error('Login failed.');
-  }
+  const legacy = passwordProof_(proof) ? legacyPassword : proof;
+  const hasLegacy = typeof legacy === 'string' && /^[0-9a-f]{32}$/.test(legacy);
+  if (!name || (!passwordProof_(proof) && !hasLegacy)) throw new Error('Login failed.');
   return locked_(() => {
     throttle_('LOGIN_GLOBAL', 100, 5);
     const db = database_();
     const row = rows_(db, 'USERS').find(user =>
-      user[2] === name && ['WORKER', 'SUPERVISOR'].includes(user[4]) && enabled_(user[5]));
+      username_(user[2]) === name && ['WORKER', 'SUPERVISOR'].includes(user[4]) && enabled_(user[5]));
     if (!row) throw new Error('Login failed.');
     const id = row[0];
     throttle_('LOGIN_' + id, 10, 15);
-    if (!same_(row[3], credential_(id, password))) throw new Error('Login failed.');
+    const stored = String(row[3]);
+    const candidate = stored.startsWith('v2:')
+      ? (passwordProof_(proof) ? savedPassword_(id, proof) : '')
+      : (hasLegacy ? credential_(id, legacy) : '');
+    if (!candidate || !same_(stored, candidate)) throw new Error('Login failed.');
     const token = id + '.' + (id_() + id_()).replace(/-/g, '');
     properties_().setProperty('SESSION_' + id,
       (Date.now() + 8 * 60 * 60000) + '|' + mac_('session|' + token + '|' + row[3] + '|' + row[7]));
@@ -295,7 +311,6 @@ function saveCatalog(kind, input) {
     const old = entries[index];
     const id = old ? old[0] : id_();
     let row;
-    let issuedPassword;
     const requests = [];
     if (kind === 'FACTORIES') {
       row = [id, requiredText_(input.name), input.active === true, old?.[3] || timestamp, timestamp];
@@ -320,22 +335,27 @@ function saveCatalog(kind, input) {
         input.active === true, old?.[10] || timestamp, timestamp];
     } else if (kind === 'USERS') {
       const username = username_(input.username);
-      if (!username) throw new Error('Use 3–40 characters for the username, starting with a letter or number. No spaces.');
+      if (!username) throw new Error('Enter a username.');
       if (!['WORKER', 'SUPERVISOR'].includes(input.role) || old?.[4] === 'ADMIN') {
         throw new Error('Choose Worker or Supervisor.');
       }
       if (entries.some(other => other[0] !== id && username_(other[2]) === username)) {
         throw new Error('Username already exists. Select that user to edit or reset their password.');
       }
-      if (!old || input.resetPassword === true) issuedPassword = id_().replace(/-/g, '');
-      const verifier = issuedPassword ? credential_(id, issuedPassword) : old[3];
+      if (input.passwordProof !== undefined && !passwordProof_(input.passwordProof)) {
+        throw new Error('Enter a password.');
+      }
+      if ((!old || (username !== username_(old[2]) && String(old[3]).startsWith('v2:'))) && !input.passwordProof) {
+        throw new Error(old ? 'Enter a new password when changing the username.' : 'Enter a password.');
+      }
+      const verifier = input.passwordProof ? savedPassword_(id, input.passwordProof) : old[3];
       const factoryIds = [...new Set(input.factories || [])];
       const valid = new Set(factoriesFor_(db, actor).map(factory => factory[0]));
       if (!factoryIds.every(factory => valid.has(factory)) ||
           (input.active === true && input.role !== 'ADMIN' && !factoryIds.length)) {
         throw new Error('Select assigned factories.');
       }
-      row = [id, requiredText_(input.name), username, verifier, input.role,
+      row = [id, username, username, verifier, input.role,
         input.active === true, old?.[6] || timestamp, timestamp];
       const assignments = rows_(db, 'USER_FACTORIES');
       const sheetId = db.getSheetByName('USER_FACTORIES').getSheetId();
@@ -357,7 +377,7 @@ function saveCatalog(kind, input) {
     }
     requests.unshift(upsert_(db, kind, index, row));
     commit_(db, requests);
-    return issuedPassword ? {id, password: issuedPassword} : {id};
+    return {id};
   });
 }
 
