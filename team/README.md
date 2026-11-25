@@ -12,3 +12,11 @@
 登录采用随机生成的密码，员工无需自行设定密码。密码以服务端密钥保护的验证值存储。网页不保存登录令牌到浏览器存储，刷新需重新登录。会话最长八小时，重新登录、重设密码、停用或更新用户会使旧会话失效。匿名访客可以打开登录页，业务方法要求通过后端身份及权限校验。仅将表格和脚本的编辑权限交给可信维护者。
 
 管理员身份要求 Google 向部署返回拥有者的真实邮箱。请先实测拥有者登录及无 Google 账号的访客流程。Apps Script 的执行和 PropertiesService 配额适用于本版本，大规模同时使用前需做负载测试。
+
+## Items and Suggested Buy
+
+In **Manage → Items**, select the factories that use the item, enter an optional estimated quantity per day for each factory, and upload a photo if needed. Saving factory changes preserves existing stock balances and history. **User accounts** is at the bottom of Manage.
+
+After updating an existing deployment, run `authorizeItemPhotos` once in the editor as the owner and approve Drive access before deploying the new version. Photos are resized in the browser and kept in a private Drive folder. The web app serves them only after checking account, item, and factory access.
+
+**Home → Suggested Buy** uses recent observed consumption when at least seven days are available, or the per-factory estimate when there is less history. A day without a record is excluded unless coverage has been confirmed. Initial lead time, review period and safety defaults are 3, 7 and 3 days. Recommendations subtract stock and eligible outstanding orders due within the planning horizon, then round up to the item's pack size. The list does not place orders. The current screen reads eligible orders already in PURCHASE_ORDERS.

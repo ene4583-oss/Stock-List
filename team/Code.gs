@@ -305,8 +305,14 @@ function saveCatalog(kind, input) {
       if (!input.decimal && rows_(db, 'STOCK').some(stock => stock[1] === id && !Number.isInteger(stock[2]))) {
         throw new Error('An existing inventory balance uses decimals.');
       }
-      row = [id, requiredText_(input.name), old?.[2] || '', requiredText_(input.unit, 30),
-        input.pack, input.decimal === true, old?.[6] || '', old?.[7] || '', old?.[8] ?? '',
+      const name = requiredText_(input.name);
+      const unit = requiredText_(input.unit, 30);
+      if (input.itemFactories !== undefined) {
+        requests.push(...itemAssignments_(db, actor, id, input.itemFactories, timestamp));
+      }
+      const image = input.photo ? storeItemImage_(input.photo) : old?.[6] || '';
+      row = [id, name, old?.[2] || '', unit,
+        input.pack, input.decimal === true, image, old?.[7] || '', old?.[8] ?? '',
         input.active === true, old?.[10] || timestamp, timestamp];
     } else if (kind === 'USERS') {
       const username = username_(input.username);
@@ -358,10 +364,10 @@ function catalog() {
   return {
     FACTORIES: rows_(db, 'FACTORIES').map(row => ({id: row[0], name: row[1], active: enabled_(row[2])})),
     ITEMS: rows_(db, 'ITEMS').map(row => ({id: row[0], name: row[1], unit: row[3],
-      pack: row[4], decimal: enabled_(row[5]), active: enabled_(row[9])})),
+      pack: row[4], decimal: enabled_(row[5]), hasPhoto: Boolean(row[6]), active: enabled_(row[9])})),
     USERS: rows_(db, 'USERS').filter(row => row[4] !== 'ADMIN').map(row => ({id: row[0], name: row[1], username: row[2],
       role: row[4], active: enabled_(row[5]), factories: assignments.filter(a => a[0] === row[0]).map(a => a[1])})),
-    STOCK: rows_(db, 'STOCK').map(row => ({factory: row[0], item: row[1], active: enabled_(row[8])}))
+    STOCK: rows_(db, 'STOCK').map(row => ({factory: row[0], item: row[1], active: enabled_(row[8]), estimatedDaily: row[3]}))
   };
 }
 
@@ -370,7 +376,7 @@ function itemMap_(db) {
 }
 
 function itemView_(item) {
-  return {id: item[0], name: item[1], unit: item[3]};
+  return {id: item[0], name: item[1], unit: item[3], ...(item[6] ? {hasPhoto:true} : {})};
 }
 
 function factoryItems(factory, token) {
@@ -510,4 +516,168 @@ function postStock_(input, token) {
     ])]);
     return {saved: true};
   });
+}
+
+function itemAssignments_(db, actor, itemId, selections, timestamp) {
+  const allowed = new Set(factoriesFor_(db, actor).map(factory => factory[0]));
+  if (!Array.isArray(selections) || selections.length > allowed.size) throw new Error('Check the factory assignments.');
+  const assigned = new Map();
+  for (const selection of selections) {
+    if (!selection || !allowed.has(selection.factory) || assigned.has(selection.factory) ||
+        (selection.estimatedDaily !== '' && (typeof selection.estimatedDaily !== 'number' ||
+          !Number.isFinite(selection.estimatedDaily) || selection.estimatedDaily < 0 || selection.estimatedDaily > 1e9))) {
+      throw new Error('Check the factory assignments and daily usage estimates.');
+    }
+    assigned.set(selection.factory, selection.estimatedDaily);
+  }
+  const updates = [];
+  const newRows = [];
+  rows_(db, 'STOCK').forEach((row, index) => {
+    if (row[1] !== itemId || !allowed.has(row[0])) return;
+    const active = assigned.has(row[0]);
+    const estimate = active ? assigned.get(row[0]) : row[3];
+    assigned.delete(row[0]);
+    if (enabled_(row[8]) === active && row[3] === estimate) return;
+    row[3] = estimate;
+    row[8] = active;
+    row[9] = timestamp;
+    updates.push(update_(db, 'STOCK', index + 2, row));
+  });
+  for (const [factory, estimate] of assigned) {
+    newRows.push([factory, itemId, 0, estimate, '', '', '', '', true, timestamp]);
+  }
+  if (newRows.length) updates.push(append_(db, 'STOCK', newRows));
+  return updates;
+}
+
+function storeItemImage_(data) {
+  if (typeof data !== 'string' || data.length > 180000 ||
+      !/^data:image\/jpeg;base64,[a-z0-9+/]+={0,2}$/i.test(data)) throw new Error('Choose a valid item photo.');
+  const bytes = Utilities.base64Decode(data.split(',')[1]);
+  if (bytes.length < 4 || (bytes[0] & 255) !== 255 || (bytes[1] & 255) !== 216 ||
+      (bytes[bytes.length - 2] & 255) !== 255 || (bytes[bytes.length - 1] & 255) !== 217) {
+    throw new Error('Choose a valid item photo.');
+  }
+  const properties = properties_();
+  const folderId = properties.getProperty('ITEM_PHOTO_FOLDER');
+  const folder = folderId ? DriveApp.getFolderById(folderId) : DriveApp.createFolder('Smart Stock item photos');
+  if (!folderId) properties.setProperty('ITEM_PHOTO_FOLDER', folder.getId());
+  return folder.createFile(Utilities.newBlob(bytes, 'image/jpeg', id_() + '.jpg')).getId();
+}
+
+function itemImage(itemId, factory, token) {
+  const db = database_();
+  const actor = principal_(db, undefined, token);
+  if (actor.role !== 'ADMIN' || factory) {
+    requireFactory_(db, actor, factory);
+    if (!rows_(db, 'STOCK').some(row => row[0] === factory && row[1] === itemId && enabled_(row[8]))) {
+      throw new Error('Access denied.');
+    }
+  }
+  const item = itemMap_(db).get(itemId);
+  const folderId = properties_().getProperty('ITEM_PHOTO_FOLDER');
+  if (!item || !item[6] || !folderId || (actor.role !== 'ADMIN' && !enabled_(item[9]))) return '';
+  try {
+    const file = DriveApp.getFileById(item[6]);
+    const parents = file.getParents();
+    while (parents.hasNext()) {
+      if (parents.next().getId() !== folderId) continue;
+      if (file.getMimeType() !== 'image/jpeg' || file.getSize() > 135000) return '';
+      return 'data:image/jpeg;base64,' + Utilities.base64Encode(file.getBlob().getBytes());
+    }
+  } catch (error) {
+    return '';
+  }
+  return '';
+}
+
+/** Run once as owner if Apps Script prompts for photo permissions after the update. */
+function authorizeItemPhotos() {
+  principal_(database_(), ['ADMIN']);
+  return DriveApp.getRootFolder().getId() ? true : false;
+}
+
+function dateKey_(value) {
+  if (value instanceof Date) return Utilities.formatDate(value, 'Asia/Kuala_Lumpur', 'yyyy-MM-dd');
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(value)) ? String(value) : '';
+}
+
+function daysFrom_(day, amount) {
+  const date = new Date(day + 'T00:00:00Z');
+  date.setUTCDate(date.getUTCDate() + amount);
+  return date.toISOString().slice(0, 10);
+}
+
+function within_(value, min, max, fallback) {
+  const number = Number(value);
+  return value !== '' && value != null && Number.isFinite(number) && number >= min && number <= max ? number : fallback;
+}
+
+function suggestedBuy() {
+  const db = database_();
+  const actor = principal_(db, ['ADMIN']);
+  const factories = new Map(factoriesFor_(db, actor).map(row => [row[0], row[1]]));
+  const items = itemMap_(db);
+  const settings = new Map(rows_(db, 'SETTINGS').map(row => [row[0], row[1]]));
+  const windowDays = Math.floor(within_(settings.get('FORECAST_WINDOW'), 7, 90, 28));
+  const today = today_();
+  const start = daysFrom_(today, -windowDays);
+  const key = (factory, item) => JSON.stringify([factory, item]);
+  const usageDays = new Map();
+  function observe(factory, item, date, amount) {
+    if (!factories.has(factory) || !date || date < start || date >= today) return;
+    const identity = key(factory, item);
+    if (!usageDays.has(identity)) usageDays.set(identity, new Map());
+    const days = usageDays.get(identity);
+    days.set(date, (days.get(date) || 0) + amount);
+  }
+  for (const row of rows_(db, 'STOCK_LOG')) {
+    if (enabled_(row[13]) && Number.isFinite(row[9])) {
+      observe(row[4], row[5], dateKey_(row[3]), row[7] === 'REVERSAL' ? -Math.abs(row[9]) : row[9]);
+    }
+  }
+  for (const row of rows_(db, 'DAILY_COVERAGE')) {
+    if (['COMPLETE', 'CONFIRMED', 'CONFIRMED_ZERO'].includes(row[4])) {
+      observe(row[1], row[2], dateKey_(row[3]), 0);
+    }
+  }
+  const orders = new Map();
+  for (const row of rows_(db, 'PURCHASE_ORDERS')) {
+    const due = dateKey_(row[6]);
+    const open = Number(row[7]) - Number(row[8]);
+    if (!['ORDERED', 'PARTIAL'].includes(row[10]) || !due || due < today || !Number.isFinite(open) || open <= 0) continue;
+    const identity = key(row[2], row[3]);
+    if (!orders.has(identity)) orders.set(identity, []);
+    orders.get(identity).push({due, open});
+  }
+  const recommendations = [];
+  let insufficient = 0;
+  for (const stock of rows_(db, 'STOCK')) {
+    const [factory, itemId, quantity, estimated] = stock;
+    const item = items.get(itemId);
+    if (!factories.has(factory) || !enabled_(stock[8]) || !item || !enabled_(item[9])) continue;
+    const identity = key(factory, itemId);
+    const days = usageDays.get(identity) || new Map();
+    const historical = days.size >= 7;
+    const daily = historical ? [...days.values()].reduce((sum, used) => sum + Math.max(0, used), 0) / days.size :
+      within_(estimated, 0.000001, 1e9, null);
+    if (daily === null || !Number.isFinite(quantity) || quantity < 0) {
+      insufficient++;
+      continue;
+    }
+    const lead = within_(stock[4], 0, 365, within_(settings.get('DEFAULT_LEAD_TIME'), 0, 365, 3));
+    const review = within_(stock[5], 0, 365, within_(settings.get('DEFAULT_REVIEW_PERIOD'), 0, 365, 7));
+    const safety = within_(stock[6], 0, 365, within_(settings.get('DEFAULT_SAFETY_DAYS'), 0, 365, 3));
+    const horizon = daysFrom_(today, Math.floor(lead + review));
+    const incoming = (orders.get(identity) || []).reduce((sum, order) => sum + (order.due <= horizon ? order.open : 0), 0);
+    const gap = round_(daily * (lead + review + safety) - quantity - incoming);
+    if (gap <= 0) continue;
+    const pack = within_(item[4], 0.000001, 1e9, 1);
+    recommendations.push({...itemView_(item), factory, factoryName:factories.get(factory),
+      quantity, suggested:round_(Math.ceil(gap / pack - 1e-9) * pack),
+      daysLeft:daily > 0 ? Math.round(quantity / daily * 10) / 10 : null,
+      basis:historical ? days.size + ' observed days' : 'Estimated usage'});
+  }
+  recommendations.sort((a, b) => (a.daysLeft ?? Infinity) - (b.daysLeft ?? Infinity));
+  return {recommendations, insufficient};
 }

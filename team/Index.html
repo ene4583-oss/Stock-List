@@ -13,7 +13,11 @@
     .brand{font-weight:750;letter-spacing:-.025em}
     .mark,.thumb{display:grid;place-items:center;flex:none;border-radius:13px;background:#eaf0ff;color:var(--blue)}
     .mark{width:38px;height:38px;background:var(--blue);color:#fff}
-    .thumb{width:52px;height:52px}.thumb svg{width:24px;height:24px}
+    .thumb{width:52px;height:52px;overflow:hidden}
+    .thumb img{width:100%;height:100%;object-fit:cover}
+    .buy-qty{flex:none;text-align:right;color:var(--blue)}
+    .assignment{display:grid;grid-template-columns:1fr minmax(7rem,40%);gap:.6rem;align-items:center;padding:.2rem 0}
+    .assignment input[type=number]{width:100%}.thumb svg{width:24px;height:24px}
     svg{width:19px;height:19px;flex:none}
     main{padding:1rem 0 6rem} h1,h2,p{margin:0 0 .75rem} h2{font-size:1.45rem;letter-spacing:-.035em}
     #account,small,.muted{color:var(--muted);font-size:.875rem}
@@ -87,7 +91,7 @@ let token = '';
 let account, current = 'Home', sequence = 0, pending = null, submitting = false;
 const rpc = (name, ...args) => new Promise((resolve, reject) => {
   const run = google.script.run.withSuccessHandler(resolve).withFailureHandler(reject);
-  if (['start', 'factoryItems', 'stockOverview', 'stockSummary', 'history', 'postStock'].includes(name)) {
+  if (['start', 'factoryItems', 'stockOverview', 'stockSummary', 'itemImage', 'history', 'postStock'].includes(name)) {
     run[name](...args, token);
   } else {
     run[name](...args);
@@ -120,7 +124,9 @@ function failure(error) {
     'Use 3–40 characters for the username, starting with a letter or number. No spaces.',
     'Choose Worker or Supervisor.',
     'Username already exists. Select that user to edit or reset their password.',
-    'An existing inventory balance uses decimals.', 'Stock limit reached.'
+    'An existing inventory balance uses decimals.', 'Stock limit reached.',
+    'Check the factory assignments.', 'Check the factory assignments and daily usage estimates.',
+    'Choose a valid item photo.', 'Could not open that photo. Try a JPG or PNG.'
   ];
   message(publicErrors.includes(text) ? text : 'Could not complete the request. Retry from this page.', true);
 }
@@ -176,15 +182,67 @@ function productIcon(name) {
   if (/paper|ream/i.test(name)) return 'paper';
   return 'box';
 }
-function product(name, detail, symbol = productIcon(name)) {
+const photoObserver = new IntersectionObserver(entries => {
+  for (const entry of entries) {
+    if (!entry.isIntersecting) continue;
+    photoObserver.unobserve(entry.target);
+    const thumb = entry.target;
+    rpc('itemImage', thumb.dataset.item, thumb.dataset.factory).then(source => {
+      if (!source || !thumb.isConnected) return;
+      const image = el('img');
+      image.alt = '';
+      image.onload = () => thumb.replaceChildren(image);
+      image.src = source;
+    }).catch(() => {});
+  }
+});
+function product(name, detail, symbol = productIcon(name), photo = null) {
   const row = el('div', '', 'product');
   const thumb = el('span', '', 'thumb');
   const text = el('div');
   thumb.append(icon(symbol));
+  if (photo?.hasPhoto) {
+    thumb.dataset.item = photo.id;
+    thumb.dataset.factory = photo.factory ?? factory.value;
+    photoObserver.observe(thumb);
+  }
   text.append(el('strong', name), el('small', detail));
   row.append(thumb, text);
   return row;
 }
+function renderBuy(result) {
+  const section = el('section');
+  section.append(el('h3', 'Suggested Buy', 'section-title'));
+  function draw(factoryId) {
+    const list = el('div', '', 'list');
+    const matches = result.recommendations.filter(row => !factoryId || row.factory === factoryId);
+    for (const row of matches) {
+      const line = el('div', '', 'item');
+      const note = [row.factoryName, 'In stock: ' + row.quantity,
+        row.daysLeft === null ? '' : row.daysLeft + ' days left', row.basis].filter(Boolean).join(' · ');
+      const amount = el('div', '', 'buy-qty');
+      amount.append(el('small', 'Buy'), el('strong', row.suggested + ' ' + row.unit));
+      line.append(product(row.name, note, productIcon(row.name), row), amount);
+      list.append(line);
+    }
+    results.replaceChildren(matches.length ? list : el('p', 'No purchase suggestions for this view.', 'muted'));
+  }
+  const results = el('div');
+  if (account.factories.length > 1) {
+    const filter = el('select');
+    filter.setAttribute('aria-label', 'Suggested Buy factory');
+    filter.append(new Option('All factories', ''), ...account.factories.map(row => new Option(row.name, row.id)));
+    filter.onchange = () => draw(filter.value);
+    section.append(filter);
+  }
+  section.append(results);
+  if (result.insufficient) {
+    section.append(el('p', result.insufficient + ' stock items need more usage history or a daily estimate.', 'muted'));
+  }
+  draw('');
+  page.append(section);
+}
+
 function renderSummary(summary) {
   const cards = el('div', '', 'metrics');
   for (const [label, value, style] of [
@@ -226,9 +284,14 @@ async function openPage(name) {
   try {
     if (name === 'Home') {
       message('Loading…');
-      const summary = await rpc('stockSummary');
+      const [summary, buy] = await Promise.all([
+        rpc('stockSummary'),
+        account.role === 'ADMIN' ? rpc('suggestedBuy').catch(() => null) : null
+      ]);
       if (version === sequence) {
         renderSummary(summary);
+        if (buy) renderBuy(buy);
+        else if (account.role === 'ADMIN') page.append(el('p', 'Suggested Buy could not load. Try reopening Home.', 'muted'));
         message('');
       }
       return;
@@ -249,7 +312,7 @@ async function openPage(name) {
           iconButton('Receive','box',() => openPage('Stock In')));
         if (account.role === 'ADMIN') actions.append(button('Opening stock', () => openPage('Opening Stock')));
         page.append(actions);
-        renderList(items.map(item => [item.name, quantityLabel('In stock', item.quantity, item.unit)]));
+        renderList(items.map(item => [item.name, quantityLabel('In stock', item.quantity, item.unit), item]));
       }
     } else if (name.endsWith('History')) {
       if (account.role !== 'WORKER') {
@@ -280,9 +343,9 @@ function renderList(records) {
     return;
   }
   const list = el('div', '', 'list');
-  records.forEach(([title, detail]) => {
+  records.forEach(([title, detail, photo]) => {
     const row = el('div', '', 'item');
-    row.append(product(title, detail));
+    row.append(product(title, detail, productIcon(title), photo));
     list.append(row);
   });
   page.append(list);
@@ -342,7 +405,7 @@ function renderEntry(items, type) {
     const query = search.value.trim().toLowerCase();
     list.replaceChildren(...items.filter(item => item.name.toLowerCase().includes(query)).map(item => {
       const row = el('div', '', 'item');
-      const label = product(item.name, item.unit ? 'Unit: ' + item.unit : '');
+      const label = product(item.name, item.unit ? 'Unit: ' + item.unit : '', productIcon(item.name), item);
       const input = el('input');
       input.type = 'number';
       input.inputMode = 'decimal';
@@ -369,8 +432,31 @@ function renderEntry(items, type) {
   paint();
   page.append(search, list, save);
 }
+async function thumbnail(file) {
+  if (file.size > 20 * 1024 * 1024) throw new Error('Choose a valid item photo.');
+  const url = URL.createObjectURL(file);
+  try {
+    const image = new Image();
+    image.src = url;
+    await image.decode();
+    const scale = Math.min(1, 300 / Math.max(image.naturalWidth, image.naturalHeight));
+    const canvas = el('canvas');
+    canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+    canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+    const context = canvas.getContext('2d');
+    context.fillStyle = '#fff';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL('image/jpeg', .78);
+  } catch (error) {
+    throw new Error('Could not open that photo. Try a JPG or PNG.');
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 function renderCatalog(data) {
-  const kinds = {FACTORIES:'Factories', ITEMS:'Items', USERS:'Users', STOCK:'Item assignments'};
+  const kinds = {FACTORIES:'Factories', ITEMS:'Items', USERS:'User accounts'};
   for (const [kind, title] of Object.entries(kinds)) {
     const card = el('details', '', 'card');
     card.name = 'manage';
@@ -379,13 +465,13 @@ function renderCatalog(data) {
     picker.setAttribute('aria-label', title);
     picker.append(new Option('New', ''));
     for (const [index, row] of data[kind].entries()) {
-      const description = row.name || [data.FACTORIES.find(f => f.id === row.factory)?.name,
-        data.ITEMS.find(i => i.id === row.item)?.name].join(' / ');
+      const description = row.name;
       picker.append(new Option(description, String(index)));
     }
     function edit() {
       const row = picker.value === '' ? {} : data[kind][Number(picker.value)];
       const fields = {};
+      const itemAssignments = [];
       const form = el('form');
       function field(key, label, type, initial, options = []) {
         const input = el(type === 'select' ? 'select' : 'input');
@@ -398,12 +484,40 @@ function renderCatalog(data) {
         wrapper.append(input);
         form.append(wrapper);
       }
-      if (kind !== 'STOCK') field('name','Name','text',row.name);
+      field('name','Name','text',row.name);
       if (kind === 'ITEMS') {
         field('unit','Unit (e.g. roll, bottle)','text',row.unit);
         field('pack','Pack size','number',row.pack ?? 1);
         fields.pack.step = 'any';
         field('decimal','Allow decimals','checkbox',row.decimal);
+        field('photo', row.hasPhoto ? 'Replace photo' : 'Upload photo', 'file', '');
+        fields.photo.accept = 'image/*';
+        if (row.hasPhoto) form.append(product(row.name, 'Current photo', productIcon(row.name), {...row, factory:''}));
+        form.append(el('h3', 'Assigned factories', 'section-title'),
+          el('p', 'Select factories. Daily usage is optional and helps estimate purchase quantities before there is enough history.', 'muted'));
+        const factories = data.FACTORIES.filter(entry => entry.active);
+        if (!factories.length) form.append(el('p', 'Create an active factory under Factories first.', 'muted'));
+        factories.forEach(entry => {
+          const existing = data.STOCK.find(stock => stock.item === row.id && stock.factory === entry.id);
+          const line = el('div', '', 'assignment');
+          const label = el('label', entry.name);
+          const assigned = el('input');
+          const daily = el('input');
+          assigned.type = 'checkbox';
+          assigned.checked = existing?.active === true;
+          daily.type = 'number';
+          daily.min = '0';
+          daily.step = 'any';
+          daily.placeholder = 'Units / day';
+          daily.value = existing?.estimatedDaily ?? '';
+          daily.disabled = !assigned.checked;
+          daily.setAttribute('aria-label', entry.name + ' estimated units per day');
+          assigned.onchange = () => { daily.disabled = !assigned.checked; };
+          label.prepend(assigned);
+          line.append(label, daily);
+          form.append(line);
+          itemAssignments.push({factory:entry.id, assigned, daily});
+        });
       }
       if (kind === 'USERS') {
         field('username','Username','text',row.username);
@@ -422,14 +536,6 @@ function renderCatalog(data) {
           field('factory:' + f.id, f.name, 'checkbox', row.factories?.includes(f.id));
         }
       }
-      if (kind === 'STOCK') {
-        field('factory','Factory','select',row.factory || data.FACTORIES.find(f => f.active)?.id,
-          data.FACTORIES.filter(f => f.active || f.id === row.factory).map(f => [f.id,f.name]));
-        field('item','Item','select',row.item || data.ITEMS.find(i => i.active)?.id,
-          data.ITEMS.filter(i => i.active || i.id === row.item).map(i => [i.id,i.name]));
-        fields.factory.disabled = Boolean(row.factory);
-        fields.item.disabled = Boolean(row.item);
-      }
       field('active','Active','checkbox',row.active ?? true);
       const save = el('button','Save','primary');
       form.append(save);
@@ -438,6 +544,7 @@ function renderCatalog(data) {
         save.disabled = true;
         const input = {id:row.id || '', factories:[]};
         for (const [key, node] of Object.entries(fields)) {
+          if (key === 'photo') continue;
           if (key.startsWith('factory:')) {
             if (node.checked) input.factories.push(key.slice(8));
           } else input[key] = node.type === 'checkbox' ? node.checked : node.type === 'number' ? Number(node.value) : node.value;
@@ -449,6 +556,13 @@ function renderCatalog(data) {
         }
         const editorAccount = account;
         try {
+          if (kind === 'ITEMS') {
+            input.itemFactories = itemAssignments.filter(entry => entry.assigned.checked).map(entry => ({
+              factory:entry.factory, estimatedDaily:entry.daily.value === '' ? '' : Number(entry.daily.value)
+            }));
+            if (fields.photo.files[0]) input.photo = await thumbnail(fields.photo.files[0]);
+            if (account !== editorAccount) return;
+          }
           const result = await rpc('saveCatalog', kind, input);
           if (account !== editorAccount) return;
           if (kind === 'FACTORIES') {
