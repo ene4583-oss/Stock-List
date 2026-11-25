@@ -28,3 +28,9 @@ Set **Number of workers** under **Manage → Factories**. In **Manage → Items*
 ### Interface text
 
 Use **Manage → Interface text** to change common menu labels, buttons, headings and messages. Leave a field blank to restore the default. The new text is visible to other users when they reopen or reload the app. Apps Script setup does not need to run again.
+
+### Delete items, factories and records
+
+In **Manage → Items** or **Manage → Factories**, select an active entry and click **Delete item** or **Delete factory**. The entry disappears from active lists while its balances and history remain. The administrator can select the inactive entry and check **Active** to restore it.
+
+In **History → Team history**, expand **Stock change** and choose **Delete record**. An administrator-only correction reverses the stock movement once, marks the original as deleted and retains both records for audit. A receipt or opening balance cannot be reversed if doing so would make the current balance negative. Restore an inactive factory to see its history in the app.

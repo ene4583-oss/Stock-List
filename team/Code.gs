@@ -447,12 +447,18 @@ function history(factory, team, token) {
   const items = itemMap_(db);
   const selected = team === true ? matchingRows_(db, 'STOCK_LOG', 5, factory, 50) :
     matchingRows_(db, 'STOCK_LOG', 7, actor.id, 100).filter(row => row[4] === factory).slice(0, 50);
+  if (!selected.length) return [];
+  const reversed = new Set(matchingRows_(db, 'STOCK_LOG', 8, 'REVERSAL', Number.MAX_SAFE_INTEGER)
+    .filter(row => row[4] === factory).map(row => row[14]));
   return selected.map(row => {
     const item = items.get(row[5]);
-    const summary = {date: String(row[3]), name: item?.[1] || String(row[5]),
-      unit: item?.[3] || '', quantity: row[9], status: 'Saved'};
-    return team === true ? {...summary, type: row[7], user: row[6],
-      before: row[10], after: row[11], reason: row[12]} : summary;
+    const deleted = reversed.has(row[0]);
+    const summary = {date: dateKey_(row[3]) || String(row[3]), name: item?.[1] || String(row[5]),
+      unit: item?.[3] || '', quantity: row[9], status: deleted ? 'Deleted' : 'Saved'};
+    if (team !== true) return summary;
+    const removable = actor.role === 'ADMIN' && !deleted && ['USE', 'RECEIVE', 'OPENING'].includes(row[7]);
+    return {...summary, type: row[7], user: row[6], before: row[10], after: row[11], reason: row[12],
+      ...(removable ? {deleteId:row[0]} : {})};
   });
 }
 
@@ -671,9 +677,11 @@ function suggestedBuy() {
     const days = usageDays.get(identity);
     days.set(date, (days.get(date) || 0) + amount);
   }
-  for (const row of rows_(db, 'STOCK_LOG')) {
-    if (enabled_(row[13]) && Number.isFinite(row[9])) {
-      observe(row[4], row[5], dateKey_(row[3]), row[7] === 'REVERSAL' ? -Math.abs(row[9]) : row[9]);
+  const ledger = rows_(db, 'STOCK_LOG');
+  const reversed = new Set(ledger.filter(row => row[7] === 'REVERSAL').map(row => row[14]));
+  for (const row of ledger) {
+    if (row[7] !== 'REVERSAL' && !reversed.has(row[0]) && enabled_(row[13]) && Number.isFinite(row[9])) {
+      observe(row[4], row[5], dateKey_(row[3]), row[9]);
     }
   }
   for (const row of rows_(db, 'DAILY_COVERAGE')) {
@@ -778,5 +786,69 @@ function saveInterfaceText(changes) {
     if (inserts.length) requests.push(append_(db, 'LABELS', inserts));
     if (requests.length) commit_(db, requests);
     return {defaults:INTERFACE_DEFAULTS, overrides};
+  });
+}
+
+// Deactivation keeps inventory keys, assignments and history recoverable.
+function deleteCatalog(kind, id) {
+  if (!['FACTORIES', 'ITEMS'].includes(kind) || typeof id !== 'string' || !id) {
+    throw new Error('Invalid request.');
+  }
+  return locked_(() => {
+    const db = database_();
+    principal_(db, ['ADMIN']);
+    const rows = rows_(db, kind);
+    const index = rows.findIndex(row => row[0] === id);
+    if (index < 0) throw new Error('Record unavailable.');
+    const row = rows[index];
+    const activeColumn = kind === 'FACTORIES' ? 2 : 9;
+    if (enabled_(row[activeColumn])) {
+      row[activeColumn] = false;
+      row[kind === 'FACTORIES' ? 4 : 11] = now_();
+      commit_(db, [update_(db, kind, index + 2, row)]);
+    }
+    return true;
+  });
+}
+
+// A reversal applies the opposite movement to today's live balance. Its reference
+// is the original Log_ID, which also makes repeated requests safe.
+function deleteStockRecord(logId) {
+  if (typeof logId !== 'string' || !logId) throw new Error('Invalid request.');
+  return locked_(() => {
+    const db = database_();
+    const actor = principal_(db, ['ADMIN']);
+    const [original] = matchingRows_(db, 'STOCK_LOG', 1, logId, 1);
+    if (!original || !['USE', 'RECEIVE', 'OPENING'].includes(original[7])) {
+      throw new Error('This record cannot be deleted.');
+    }
+    if (matchingRows_(db, 'STOCK_LOG', 15, logId, Number.MAX_SAFE_INTEGER).some(row => row[7] === 'REVERSAL')) {
+      return true;
+    }
+    const stockRows = rows_(db, 'STOCK');
+    const indexes = stockRows.flatMap((row, index) => row[0] === original[4] && row[1] === original[5] ? [index] : []);
+    if (indexes.length !== 1 || !Number.isFinite(original[9]) || original[9] <= 0) {
+      throw new Error('This record cannot be deleted.');
+    }
+    const index = indexes[0];
+    const stock = stockRows[index];
+    const before = stock[2];
+    if (!Number.isFinite(before) || before < 0) throw new Error('This record cannot be deleted.');
+    const after = round_(before + (original[7] === 'USE' ? original[9] : -original[9]));
+    if (after < 0) throw new Error('Delete would make stock negative. Check later stock movements first.');
+    if (after > 1e9) throw new Error('Delete would exceed the stock limit.');
+    const timestamp = now_();
+    const request = id_();
+    const reversal = id_();
+    stock[2] = after;
+    stock[9] = timestamp;
+    commit_(db, [
+      update_(db, 'STOCK', index + 2, stock),
+      append_(db, 'STOCK_LOG', [[reversal, request, timestamp, dateKey_(original[3]) || today_(),
+        original[4], original[5], actor.id, 'REVERSAL', '', original[9], before, after,
+        'Deleted by administrator', false, logId]]),
+      append_(db, 'REQUEST_LOG', [[request, actor.id, 'REVERSAL', '', 'COMPLETED', reversal, timestamp, timestamp, '']])
+    ]);
+    return true;
   });
 }

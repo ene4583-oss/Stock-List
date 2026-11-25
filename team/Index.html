@@ -32,6 +32,7 @@
     button{min-width:44px;cursor:pointer} button:disabled{opacity:.55;cursor:default}
     :focus-visible{outline:2px solid var(--blue);outline-offset:2px}
     .full{justify-content:center}
+    .danger{color:#9f2424;border-color:#edc8c8}.danger:hover{background:#fff3f3}
     .primary{color:#fff;background:var(--blue);border-color:var(--blue);font-weight:700}
     .actions{flex-wrap:wrap;margin:.75rem 0}
     #factoryField{margin:0 0 .8rem;color:var(--muted);font-size:.875rem}
@@ -143,6 +144,9 @@ function failure(error) {
     'Check the factory assignments.', 'Check the factory assignments and daily usage estimates.',
     'Enter a whole number of workers, or leave it blank.',
     'Enter a valid daily usage per worker, or leave it blank.',
+    'Record unavailable.', 'This record cannot be deleted.',
+    'Delete would make stock negative. Check later stock movements first.',
+    'Delete would exceed the stock limit.',
     'Check the interface text.', 'Choose a valid item photo.', 'Could not open that photo. Try a JPG or PNG.'
   ];
   message(publicErrors.includes(text) ? text : 'Could not complete the request. Retry from this page.', true);
@@ -395,16 +399,25 @@ function renderHistory(records) {
     return;
   }
   const list = el('div', '', 'list');
-  const actions = {USE:label('used','Used'), RECEIVE:label('received','Received'), OPENING:label('opening','Opening stock')};
+  const actions = {USE:label('used','Used'), RECEIVE:label('received','Received'),
+    OPENING:label('opening','Opening stock'), REVERSAL:'Stock correction'};
   for (const record of records) {
     const row = el('div', '', 'item');
     row.append(product(record.name, displayDate(record.date)));
     const info = el('div', '', 'stock-number');
     const action = actions[record.type] || label('used','Used');
     info.append(el('span', action + ' ' + displayQuantity(record.quantity, record.unit), 'movement'));
+    if (record.status === 'Deleted') info.append(el('small', 'Deleted'));
     if (record.before !== undefined) {
       const details = el('details', '', 'record-info');
       details.append(el('summary','Stock change'), el('small', String(record.before) + ' → ' + String(record.after)));
+      if (record.deleteId) {
+        const remove = button('Delete record', async () => {
+          if (!window.confirm('Delete this record and reverse its stock change?')) return;
+          await removeEntry(remove, 'deleteStockRecord', [record.deleteId], current);
+        }, 'danger');
+        details.append(remove);
+      }
       info.append(details);
     }
     row.append(info);
@@ -517,6 +530,27 @@ async function thumbnail(file) {
   }
 }
 
+async function removeEntry(control, endpoint, args, view) {
+  const currentAccount = account;
+  const version = sequence;
+  control.disabled = true;
+  try {
+    await rpc(endpoint, ...args);
+    if (account !== currentAccount || sequence !== version) return;
+    if (endpoint === 'deleteCatalog' && args[0] === 'FACTORIES') {
+      const next = await rpc('start');
+      if (account !== currentAccount || sequence !== version) return;
+      populate(next);
+    }
+    await openPage(view);
+    message('Deleted.');
+  } catch (error) {
+    if (account === currentAccount && sequence === version) failure(error);
+  } finally {
+    control.disabled = false;
+  }
+}
+
 function interfaceSettings() {
   const card = el('details', '', 'card');
   card.id = 'interfaceSettings';
@@ -582,7 +616,7 @@ function renderCatalog(data) {
     picker.append(new Option('New', ''));
     for (const [index, row] of data[kind].entries()) {
       const description = kind === 'USERS' ? row.username : row.name;
-      picker.append(new Option(description, String(index)));
+      picker.append(new Option(description + (row.active ? '' : ' (inactive)'), String(index)));
     }
     function edit() {
       const row = picker.value === '' ? {} : data[kind][Number(picker.value)];
@@ -668,7 +702,17 @@ function renderCatalog(data) {
       }
       field('active','Active','checkbox',row.active ?? true);
       const save = el('button',label('save','Save'),'primary');
-      form.append(save);
+      const controls = el('div', '', 'actions');
+      controls.append(save);
+      if (row.id && row.active && kind !== 'USERS') {
+        const noun = kind === 'ITEMS' ? 'item' : 'factory';
+        const remove = button('Delete ' + noun, async () => {
+          if (!window.confirm('Delete ' + row.name + ' from active lists? Its history will be kept.')) return;
+          await removeEntry(remove, 'deleteCatalog', [kind, row.id], 'Manage');
+        }, 'danger');
+        controls.append(remove);
+      }
+      form.append(controls);
       form.onsubmit = async event => {
         event.preventDefault();
         save.disabled = true;
