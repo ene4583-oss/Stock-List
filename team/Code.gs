@@ -312,7 +312,7 @@ function saveCatalog(kind, input) {
       const username = username_(input.username);
       if (!username || !['WORKER', 'SUPERVISOR'].includes(input.role) || old?.[4] === 'ADMIN' ||
           entries.some(other => other[0] !== id && other[2] === username)) {
-        throw new Error('用户名或身份无效，或用户名已被使用。');
+        throw new Error('Check the username and role. The username may already be taken.');
       }
       if (!old || input.resetPassword === true) issuedPassword = id_().replace(/-/g, '');
       const verifier = issuedPassword ? credential_(id, issuedPassword) : old[3];
@@ -377,6 +377,21 @@ function factoryItems(factory, token) {
   const items = itemMap_(db);
   return rows_(db, 'STOCK').filter(row => row[0] === factory && enabled_(row[8]) &&
     items.has(row[1]) && enabled_(items.get(row[1])[9])).map(row => itemView_(items.get(row[1])));
+}
+
+function stockSummary(token) {
+  const db = database_();
+  const actor = principal_(db, ['ADMIN', 'SUPERVISOR'], token);
+  const factories = new Map(factoriesFor_(db, actor).map(row =>
+    [row[0], {id:row[0], name:row[1], items:0, empty:0}]));
+  const activeItems = new Set(rows_(db, 'ITEMS').filter(row => enabled_(row[9])).map(row => row[0]));
+  for (const row of rows_(db, 'STOCK')) {
+    const factory = factories.get(row[0]);
+    if (!factory || !enabled_(row[8]) || !activeItems.has(row[1])) continue;
+    factory.items++;
+    if (row[2] === 0) factory.empty++;
+  }
+  return [...factories.values()];
 }
 
 function stockOverview(factory, token) {

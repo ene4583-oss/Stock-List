@@ -4,41 +4,74 @@
   <base target="_top">
   <meta charset="utf-8">
   <style>
-    :root{font:16px system-ui,sans-serif;color:#1e293b;background:#f8fafc}
-    *{box-sizing:border-box} body{margin:0} header{background:white;border-bottom:1px solid #dbe3ee}
-    header div,main{max-width:56rem;margin:auto;padding:1rem} header div{display:flex;justify-content:space-between;align-items:center;gap:1rem}
-    main{padding-bottom:5rem} h1,h2,p{margin:0 0 .8rem} h2{font-size:1.35rem} nav,.actions{display:flex;flex-wrap:wrap;gap:.5rem;margin:.8rem 0}
-    button,input,select{font:inherit;min-height:44px;border:1px solid #94a3b8;border-radius:.65rem;padding:.55rem .75rem;color:inherit;background:white}
-    input[type=checkbox]{width:22px;min-height:0;height:22px;accent-color:#2563eb} button{cursor:pointer;min-width:44px} button[aria-current=true],.primary{background:#2563eb;color:white;border-color:#2563eb}
-    button:disabled{opacity:.55} label{display:flex;gap:.45rem;align-items:center;flex-wrap:wrap;margin:.55rem 0}
+    :root{font:16px system-ui,sans-serif;color:#172235;background:#f6f8fc;--line:#e2e8f0;--blue:#2359d8;--muted:#52637b}
+    *{box-sizing:border-box} [hidden]{display:none!important} body{margin:0}
+    header{background:#fff;border-bottom:1px solid var(--line)}
+    .bar,main{width:min(100% - 2rem,46rem);margin:auto}
+    .bar{display:flex;justify-content:space-between;align-items:center;gap:.75rem;min-height:68px}
+    .brand,.with-icon,.product,.actions{display:flex;align-items:center;gap:.65rem}
+    .brand{font-weight:750;letter-spacing:-.025em}
+    .mark,.thumb{display:grid;place-items:center;flex:none;border-radius:13px;background:#eaf0ff;color:var(--blue)}
+    .mark{width:38px;height:38px;background:var(--blue);color:#fff}
+    .thumb{width:52px;height:52px}.thumb svg{width:24px;height:24px}
+    svg{width:19px;height:19px;flex:none}
+    main{padding:1rem 0 6rem} h1,h2,p{margin:0 0 .75rem} h2{font-size:1.45rem;letter-spacing:-.035em}
+    #account,small,.muted{color:var(--muted);font-size:.875rem}
+    nav{display:flex;gap:.25rem;margin:0 0 1rem;padding:.35rem;background:#fff;border:1px solid var(--line);border-radius:15px}
+    nav:empty{display:none} nav button{flex:1;border:0;display:flex;justify-content:center;align-items:center;gap:.4rem;color:var(--muted);white-space:nowrap}
+    nav button[aria-current=page]{color:var(--blue);background:#edf2ff;font-weight:700}
+    button,input,select{font:inherit;min-height:44px;border:1px solid #c6d1df;border-radius:10px;padding:.55rem .75rem;color:inherit;background:#fff}
+    button{min-width:44px;cursor:pointer} button:disabled{opacity:.55;cursor:default}
+    :focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+    .full{justify-content:center}
+    .primary{color:#fff;background:var(--blue);border-color:var(--blue);font-weight:700}
+    .actions{flex-wrap:wrap;margin:.75rem 0}
+    #factoryField{margin:0 0 .8rem;color:var(--muted);font-size:.875rem}
+    input[type=checkbox]{width:22px;min-height:0;height:22px;accent-color:var(--blue)}
+    label{display:flex;gap:.45rem;align-items:center;flex-wrap:wrap;margin:.55rem 0}
     label input:not([type=checkbox]),label select{width:100%}
-    .card,.item{background:white;border:1px solid #dbe3ee;border-radius:.9rem;padding:.9rem;margin:.5rem 0}
-    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,15rem),1fr));gap:.55rem}
-    .item{display:flex;align-items:center;justify-content:space-between;gap:.6rem;overflow-wrap:anywhere}
-    small{display:block;color:#475569} .stepper{display:flex;align-items:center;gap:.25rem}
-    .stepper input{width:4.6rem;text-align:center;padding:.3rem} #search{width:100%;margin-bottom:.5rem}
-    #message{min-height:1.5rem;color:#166534} #message.error{color:#b91c1c}
-    dialog{width:min(32rem,calc(100% - 2rem));border:1px solid #94a3b8;border-radius:1rem;padding:1rem;color:inherit} dialog::backdrop{background:#1e293b88}
-    @media(max-width:420px){header div{align-items:flex-start;flex-direction:column}.item{align-items:flex-start;flex-direction:column}nav button{flex:1}}
+    .card,.list,.metric{background:#fff;border:1px solid var(--line);border-radius:15px;padding:1rem;margin:.55rem 0}
+    .list{padding:0 1rem}.item{display:flex;align-items:center;justify-content:space-between;gap:.65rem;padding:.75rem 0;overflow-wrap:anywhere}
+    .item + .item{border-top:1px solid var(--line)}
+    .product{min-width:0}.product strong{display:block}.product small{display:block;margin-top:.2rem}
+    .stepper{display:flex;align-items:center;gap:.15rem;flex:none}
+    .stepper button{border-radius:50%;padding:0;font-size:1.25rem;color:var(--blue)}
+    .stepper input{width:3.5rem;text-align:center;padding:.1rem;border-color:transparent;appearance:textfield}
+    .stepper input::-webkit-inner-spin-button,.stepper input::-webkit-outer-spin-button{appearance:none}
+    #search,.full{width:100%;margin:.25rem 0 .6rem}
+    #message{color:#166534}#message:empty{display:none}#message.error{color:#b91c1c}
+    .metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:.6rem}.metric{margin:0}.metric strong{display:block;font-size:1.6rem;margin-top:.28rem}
+    .metric.warning strong{color:#a43a15}.section-title{font-size:1rem;margin:1.1rem 0 .45rem}
+    details summary{cursor:pointer;min-height:44px;padding:.6rem 0;font-weight:650}
+    dialog{width:min(32rem,calc(100% - 2rem));border:1px solid var(--line);border-radius:15px;padding:1rem;color:inherit}dialog::backdrop{background:#1e293b88}
+    #signOut{font-size:.85rem}
+    @media(max-width:560px){
+      nav{position:fixed;bottom:0;left:0;right:0;z-index:2;margin:0;border-radius:0;padding:.25rem .45rem max(.4rem,env(safe-area-inset-bottom))}
+      nav button{flex-direction:column;font-size:.72rem;gap:.2rem;padding:.25rem .15rem;min-height:50px}
+      .metric{padding:.65rem}.thumb{width:42px;height:42px}.thumb svg{width:19px;height:19px}
+      .list{padding:0 .65rem}.item{gap:.4rem}.stepper input{width:2.6rem}.product{gap:.45rem}
+    }
   </style>
 </head>
 <body>
-<header><div><strong>Smart Stock</strong><span id="account"></span></div></header>
+<header><div class="bar">
+  <div class="brand"><span id="brandIcon" class="mark"></span>Smart Stock</div>
+  <div class="with-icon"><span id="account"></span><button id="signOut" type="button" hidden>Sign out</button></div>
+</div></header>
 <main>
   <label id="factoryField" style="display:none" hidden>Factory <select id="factory"></select></label>
   <nav id="navigation" aria-label="Main"></nav>
   <p id="message" role="status" aria-live="polite">Loading…</p>
   <section id="page"></section>
   <section class="card" id="login" hidden>
-    <h2>员工 / 主管登录</h2>
+    <h2>Staff sign in</h2>
     <form id="loginForm">
-      <label>用户名 <input id="username" autocomplete="username" required maxlength="40"></label>
-      <label>密码 <input id="password" type="password" autocomplete="current-password" required maxlength="32"></label>
-      <button id="signIn" class="primary">登录</button>
+      <label>Username <input id="username" autocomplete="username" required maxlength="40"></label>
+      <label>Password <input id="password" type="password" autocomplete="current-password" required maxlength="32"></label>
+      <button id="signIn" class="primary">Sign in</button>
     </form>
-    <p><button id="ownerLogin" type="button">管理员用 Google 账号进入</button></p>
+    <p><button id="ownerLogin" type="button">Sign in as administrator</button></p>
   </section>
-  <button id="signOut" type="button" hidden>退出登录</button>
 </main>
 <dialog id="confirmation">
   <h2>Confirm quantities</h2>
@@ -54,7 +87,7 @@ let token = '';
 let account, current = 'Home', sequence = 0, pending = null, submitting = false;
 const rpc = (name, ...args) => new Promise((resolve, reject) => {
   const run = google.script.run.withSuccessHandler(resolve).withFailureHandler(reject);
-  if (['start', 'factoryItems', 'stockOverview', 'history', 'postStock'].includes(name)) {
+  if (['start', 'factoryItems', 'stockOverview', 'stockSummary', 'history', 'postStock'].includes(name)) {
     run[name](...args, token);
   } else {
     run[name](...args);
@@ -83,33 +116,118 @@ function failure(error) {
     'Check the quantity. Some items require whole numbers.', 'Item unavailable.',
     'System busy. Retry the same request.', 'This item already has stock history.',
     'Check the required fields.', 'Invalid pack size.', 'Check the email and role.',
-    'Select assigned factories.', '用户名或身份无效，或用户名已被使用。', 'Keep your administrator account active.',
+    'Select assigned factories.', 'Check the username and role. The username may already be taken.', 'Keep your administrator account active.',
     'An existing inventory balance uses decimals.', 'Stock limit reached.'
   ];
   message(publicErrors.includes(text) ? text : 'Could not complete the request. Retry from this page.', true);
 }
+const paths = {
+  box:'M21 8l-9 5-9-5m9 5v9M3 8v9l9 5 9-5V8l-9-5z',
+  use:'M12 4v16M4 12h16',
+  history:'M4 12a8 8 0 1 1 2 5m-2 0v-5h5m3-4v4l3 2',
+  home:'M3 10l9-7 9 7v10H3zm6 10v-6h6v6',
+  more:'M4 6h16M4 12h16M4 18h16',
+  factory:'M3 21V10l6-4v5l6-4v4l6-4v14zM7 16h1m4 0h1m4 0h1',
+  check:'m5 12 4 4L19 6',
+  soap:'M9 3h8m-6 0v5m-4 0h8v3l2 3v6H5v-6l2-3zm-2 7h12',
+  paper:'M6 3h9l4 4v14H6zm8 0v5h5M9 13h7m-7 4h7',
+  bag:'M9 4h6l-2 4 6 8v4H5v-4l6-8zm1 4h4',
+  roll:'M4 7a4 4 0 1 1 8 0v10a3 3 0 1 1-6 0v-2m-2-8h15a2 2 0 0 1 2 2v8H9',
+};
+function icon(name) {
+  const namespace = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(namespace, 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '1.7');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  svg.setAttribute('aria-hidden', 'true');
+  const path = document.createElementNS(namespace, 'path');
+  path.setAttribute('d', paths[name]);
+  svg.append(path);
+  return svg;
+}
+byId('brandIcon').append(icon('box'));
+function iconButton(label, symbol, action, style = '') {
+  const control = button(label, action, 'with-icon ' + style);
+  control.prepend(icon(symbol));
+  return control;
+}
 function routes() {
-  const base = ['Home', 'Use Item', 'My History'];
-  if (account.role !== 'WORKER') base.push('Stock', 'Stock In', 'Team History');
-  if (account.role === 'ADMIN') base.push('Opening Stock', 'Manage');
-  return base;
+  if (account.role === 'WORKER') return [['Use Now','use','Use Item'], ['History','history','My History']];
+  const links = [['Home','home','Home'], ['Stock','box','Stock'], ['History','history','Team History']];
+  if (account.role === 'ADMIN') links.push(['Manage','more','Manage']);
+  return links;
+}
+function activeRoute(name) {
+  if (name.endsWith('History')) return 'History';
+  if (account.role !== 'WORKER' && ['Stock','Stock In','Opening Stock','Use Item'].includes(name)) return 'Stock';
+  return name === 'Use Item' ? 'Use Now' : name;
+}
+function productIcon(name) {
+  if (/toilet|tissue|roll/i.test(name)) return 'roll';
+  if (/soap|saniti[sz]er/i.test(name)) return 'soap';
+  if (/bag|liner/i.test(name)) return 'bag';
+  if (/paper|ream/i.test(name)) return 'paper';
+  return 'box';
+}
+function product(name, detail, symbol = productIcon(name)) {
+  const row = el('div', '', 'product');
+  const thumb = el('span', '', 'thumb');
+  const text = el('div');
+  thumb.append(icon(symbol));
+  text.append(el('strong', name), el('small', detail));
+  row.append(thumb, text);
+  return row;
+}
+function renderSummary(summary) {
+  const cards = el('div', '', 'metrics');
+  for (const [label, value, style] of [
+    ['Factories', summary.length, ''],
+    ['Stock items', summary.reduce((sum, row) => sum + row.items, 0), ''],
+    ['Out of stock', summary.reduce((sum, row) => sum + row.empty, 0), 'warning']
+  ]) {
+    const card = el('div', '', 'metric ' + style);
+    card.append(el('small', label), el('strong', String(value)));
+    cards.append(card);
+  }
+  page.append(cards, el('h3', 'Factory overview', 'section-title'));
+  if (!summary.length) page.append(el('p', 'No active factories yet.', 'muted'));
+  if (summary.length) {
+    const list = el('div', '', 'list');
+    for (const entry of summary) {
+      const row = el('div', '', 'item');
+      row.append(product(entry.name, entry.items + ' stock items · ' + entry.empty + ' out of stock', 'factory'),
+        button('Stock', () => { factory.value = entry.id; openPage('Stock'); }));
+      list.append(row);
+    }
+    page.append(list);
+  }
 }
 async function openPage(name) {
   if (submitting) return;
   current = name;
   const version = ++sequence;
-  byId('navigation').replaceChildren(...routes().map(route => {
-    const control = button(route, () => openPage(route));
-    control.setAttribute('aria-current', String(route === name));
+  byId('navigation').replaceChildren(...routes().map(([label, symbol, route]) => {
+    const control = iconButton(label, symbol, () => openPage(route));
+    if (label === activeRoute(name)) control.setAttribute('aria-current', 'page');
     return control;
   }));
-  page.replaceChildren(el('h2', name));
+  const title = {Home:'Stock dashboard', 'Use Item':'Use now', 'Stock In':'Receive stock',
+    'Opening Stock':'Opening stock', 'My History':'My history', 'Team History':'Team history'}[name] || name;
+  page.replaceChildren(el('h2', title));
+  byId('factoryField').hidden = !account.factories.length || ['Home', 'Manage'].includes(name);
   message('');
   try {
     if (name === 'Home') {
-      const shortcuts = el('div', '', 'grid');
-      routes().slice(1).forEach(route => shortcuts.append(button(route, () => openPage(route), 'card')));
-      page.append(shortcuts);
+      message('Loading…');
+      const summary = await rpc('stockSummary');
+      if (version === sequence) {
+        renderSummary(summary);
+        message('');
+      }
       return;
     }
     if (name !== 'Manage' && !factory.value) {
@@ -122,8 +240,21 @@ async function openPage(name) {
       if (version === sequence) renderCatalog(data);
     } else if (name === 'Stock') {
       const items = await rpc('stockOverview', factory.value);
-      if (version === sequence) renderList(items.map(item => [item.name, item.quantity + ' ' + item.unit]));
+      if (version === sequence) {
+        const actions = el('div', '', 'actions');
+        actions.append(iconButton('Use now','use',() => openPage('Use Item')),
+          iconButton('Receive','box',() => openPage('Stock In')));
+        if (account.role === 'ADMIN') actions.append(button('Opening stock', () => openPage('Opening Stock')));
+        page.append(actions);
+        renderList(items.map(item => [item.name, item.quantity + ' ' + item.unit]));
+      }
     } else if (name.endsWith('History')) {
+      if (account.role !== 'WORKER') {
+        const actions = el('div', '', 'actions');
+        actions.append(button(name === 'Team History' ? 'My history' : 'Team history',
+          () => openPage(name === 'Team History' ? 'My History' : 'Team History')));
+        page.append(actions);
+      }
       const rows = await rpc('history', factory.value, name === 'Team History');
       if (version === sequence) renderList(rows.map(row => [row.name,
         [row.date, row.quantity + ' ' + row.unit, row.type, row.status,
@@ -138,12 +269,17 @@ async function openPage(name) {
   }
 }
 function renderList(records) {
-  if (!records.length) page.append(el('p', 'No records yet.'));
+  if (!records.length) {
+    page.append(el('p', 'No records yet.', 'muted'));
+    return;
+  }
+  const list = el('div', '', 'list');
   records.forEach(([title, detail]) => {
     const row = el('div', '', 'item');
-    row.append(el('strong', title), el('small', detail));
-    page.append(row);
+    row.append(product(title, detail));
+    list.append(row);
   });
+  page.append(list);
 }
 function renderEntry(items, type) {
   if (!items.length) {
@@ -156,8 +292,8 @@ function renderEntry(items, type) {
   search.type = 'search';
   search.placeholder = 'Search items';
   search.setAttribute('aria-label', 'Search items');
-  const list = el('div');
-  const save = button('Save', () => {
+  const list = el('div', '', 'list');
+  const save = iconButton('Save', 'check', () => {
     const lines = items.map(item => ({item:item.id, quantity:Number(values.get(item.id) || 0)}))
       .filter(line => line.quantity !== 0);
     if (!lines.length || lines.some(line => !Number.isFinite(line.quantity) || line.quantity < 0)) {
@@ -195,13 +331,12 @@ function renderEntry(items, type) {
         dialog.close();
       }
     };
-  }, 'primary');
+  }, 'primary full');
   function paint() {
     const query = search.value.trim().toLowerCase();
     list.replaceChildren(...items.filter(item => item.name.toLowerCase().includes(query)).map(item => {
       const row = el('div', '', 'item');
-      const label = el('div');
-      label.append(el('strong', item.name), el('small', item.unit));
+      const label = product(item.name, item.unit);
       const input = el('input');
       input.type = 'number';
       input.inputMode = 'decimal';
@@ -231,7 +366,8 @@ function renderEntry(items, type) {
 function renderCatalog(data) {
   const kinds = {FACTORIES:'Factories', ITEMS:'Items', USERS:'Users', STOCK:'Item assignments'};
   for (const [kind, title] of Object.entries(kinds)) {
-    const card = el('section', '', 'card');
+    const card = el('details', '', 'card');
+    card.name = 'manage';
     const editor = el('div');
     const picker = el('select');
     picker.setAttribute('aria-label', title);
@@ -264,9 +400,9 @@ function renderCatalog(data) {
         field('decimal','Allow decimals','checkbox',row.decimal);
       }
       if (kind === 'USERS') {
-        field('username','用户名','text',row.username);
-        if (row.id) field('resetPassword','生成新密码','checkbox',false);
-        field('role','Role','select',row.role || 'WORKER',[['WORKER','员工'],['SUPERVISOR','主管']]);
+        field('username','Username','text',row.username);
+        if (row.id) field('resetPassword','Reset password','checkbox',false);
+        field('role','Role','select',row.role || 'WORKER',[['WORKER','Worker'],['SUPERVISOR','Supervisor']]);
         for (const f of data.FACTORIES.filter(f => f.active)) {
           field('factory:' + f.id, f.name, 'checkbox', row.factories?.includes(f.id));
         }
@@ -307,7 +443,7 @@ function renderCatalog(data) {
     }
     picker.onchange = edit;
     edit();
-    card.append(el('h2', title), picker, editor);
+    card.append(el('summary', title), picker, editor);
     page.append(card);
   }
 }
@@ -328,8 +464,8 @@ function showPassword(password) {
   const value = el('input');
   value.value = password;
   value.readOnly = true;
-  value.setAttribute('aria-label', '新密码');
-  card.append(el('p', '请复制新密码，私下发给员工。离开此页后不会再显示。'), value);
+  value.setAttribute('aria-label', 'New password');
+  card.append(el('p', 'Copy this password and send it privately to the employee. It is shown only once.'), value);
   page.prepend(card);
   value.select();
 }
@@ -349,9 +485,9 @@ async function enter() {
   populate(await rpc('start'));
   byId('login').hidden = true;
   byId('signOut').hidden = !token;
-  return openPage('Home');
+  return openPage(account.role === 'WORKER' ? 'Use Item' : 'Home');
 }
-byId('ownerLogin').onclick = () => enter().catch(() => loggedOut('请用部署者的 Google 账号打开网页。'));
+byId('ownerLogin').onclick = () => enter().catch(() => loggedOut('Open the app with the Google account used to deploy it.'));
 byId('loginForm').onsubmit = async event => {
   event.preventDefault();
   byId('signIn').disabled = true;
@@ -359,7 +495,7 @@ byId('loginForm').onsubmit = async event => {
     token = await rpc('signIn', byId('username').value, byId('password').value);
     await enter();
   } catch (error) {
-    loggedOut('登录失败，请检查用户名和密码，稍后再试。');
+    loggedOut('Sign-in failed. Check your username and password and try again.');
   } finally {
     byId('password').value = '';
     byId('signIn').disabled = false;
