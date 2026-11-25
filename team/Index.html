@@ -246,7 +246,7 @@ async function openPage(name) {
           iconButton('Receive','box',() => openPage('Stock In')));
         if (account.role === 'ADMIN') actions.append(button('Opening stock', () => openPage('Opening Stock')));
         page.append(actions);
-        renderList(items.map(item => [item.name, item.quantity + ' ' + item.unit]));
+        renderList(items.map(item => [item.name, quantityLabel('In stock', item.quantity, item.unit)]));
       }
     } else if (name.endsWith('History')) {
       if (account.role !== 'WORKER') {
@@ -257,7 +257,7 @@ async function openPage(name) {
       }
       const rows = await rpc('history', factory.value, name === 'Team History');
       if (version === sequence) renderList(rows.map(row => [row.name,
-        [row.date, row.quantity + ' ' + row.unit, row.type, row.status,
+        [row.date, quantityLabel('Quantity', row.quantity, row.unit), row.type, row.status,
           row.before === undefined ? '' : row.before + ' → ' + row.after].filter(Boolean).join(' · ')]));
     } else {
       const items = await rpc('factoryItems', factory.value);
@@ -267,6 +267,9 @@ async function openPage(name) {
   } catch (error) {
     if (version === sequence) failure(error);
   }
+}
+function quantityLabel(label, quantity, unit) {
+  return label + ': ' + quantity + (unit ? ' · Unit: ' + unit : '');
 }
 function renderList(records) {
   if (!records.length) {
@@ -307,7 +310,7 @@ function renderEntry(items, type) {
     }
     byId('summary').replaceChildren(...lines.map(line => {
       const item = items.find(row => row.id === line.item);
-      return el('li', item.name + ' · ' + line.quantity + ' ' + item.unit);
+      return el('li', item.name + ' · ' + quantityLabel('Quantity', line.quantity, item.unit));
     }));
     dialog.showModal();
     byId('confirm').onclick = async () => {
@@ -336,7 +339,7 @@ function renderEntry(items, type) {
     const query = search.value.trim().toLowerCase();
     list.replaceChildren(...items.filter(item => item.name.toLowerCase().includes(query)).map(item => {
       const row = el('div', '', 'item');
-      const label = product(item.name, item.unit);
+      const label = product(item.name, item.unit ? 'Unit: ' + item.unit : '');
       const input = el('input');
       input.type = 'number';
       input.inputMode = 'decimal';
@@ -394,7 +397,7 @@ function renderCatalog(data) {
       }
       if (kind !== 'STOCK') field('name','Name','text',row.name);
       if (kind === 'ITEMS') {
-        field('unit','Unit','text',row.unit);
+        field('unit','Unit (e.g. roll, bottle)','text',row.unit);
         field('pack','Pack size','number',row.pack ?? 1);
         fields.pack.step = 'any';
         field('decimal','Allow decimals','checkbox',row.decimal);
