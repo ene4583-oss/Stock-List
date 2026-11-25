@@ -6,8 +6,10 @@ function doGet() {
 function start(token) {
   const db = database_();
   const actor = principal_(db, undefined, token);
-  return {name: actor.name, role: actor.role, factories: factoriesFor_(db, actor)
-    .map(row => ({id: row[0], name: row[1]}))};
+  const factories = factoriesFor_(db, actor).map(row => ({id:row[0], name:row[1]}));
+  return {name:actor.name, role:actor.role, factories,
+    ...(actor.role === 'ADMIN' ? {archivedFactories:rows_(db, 'FACTORIES').filter(row => !enabled_(row[2]))
+      .map(row => ({id:row[0], name:row[1]}))} : {})};
 }
 
 const SCHEMA = Object.freeze({
@@ -226,7 +228,7 @@ function sessionUser_(db, token) {
   if (typeof token !== 'string' || !/^[0-9a-f-]{36}\.[0-9a-f]{64}$/.test(token)) return null;
   const id = token.split('.')[0];
   const row = rows_(db, 'USERS').find(user => user[0] === id);
-  if (!row || !['WORKER', 'SUPERVISOR'].includes(row[4]) || !enabled_(row[5])) return null;
+  if (!row || !['WORKER', 'SUPERVISOR', 'ADMIN'].includes(row[4]) || !enabled_(row[5])) return null;
   const saved = properties_().getProperty('SESSION_' + id);
   if (!saved) return null;
   const [expires, verifier] = saved.split('|');
@@ -265,7 +267,7 @@ function signIn(username, proof, legacyPassword) {
     throttle_('LOGIN_GLOBAL', 100, 5);
     const db = database_();
     const row = rows_(db, 'USERS').find(user =>
-      username_(user[2]) === name && ['WORKER', 'SUPERVISOR'].includes(user[4]) && enabled_(user[5]));
+      username_(user[2]) === name && ['WORKER', 'SUPERVISOR', 'ADMIN'].includes(user[4]) && Boolean(user[3]) && enabled_(user[5]));
     if (!row) throw new Error('Login failed.');
     const id = row[0];
     throttle_('LOGIN_' + id, 10, 15);
@@ -299,11 +301,11 @@ function requireFactory_(db, user, id) {
   if (!factoriesFor_(db, user).some(row => row[0] === id)) throw new Error('Access denied.');
 }
 
-function saveCatalog(kind, input) {
+function saveCatalog(kind, input, token) {
   if (!['FACTORIES', 'ITEMS', 'USERS', 'STOCK'].includes(kind) || !input) throw new Error('Invalid request.');
   return locked_(() => {
     const db = database_();
-    const actor = principal_(db, ['ADMIN']);
+    const actor = principal_(db, ['ADMIN'], token);
     const entries = rows_(db, kind);
     const timestamp = now_();
     let index = entries.findIndex(row => row[0] === input.id);
@@ -313,6 +315,9 @@ function saveCatalog(kind, input) {
     let row;
     const requests = [];
     if (kind === 'FACTORIES') {
+      if (old && rows_(db, 'SETTINGS').some(setting => setting[0] === 'FACTORY_DELETED_' + id && enabled_(setting[1]))) {
+        throw new Error('Record unavailable.');
+      }
       row = [id, requiredText_(input.name), input.active === true, old?.[3] || timestamp, timestamp];
       const change = forecastSetting_(db, 'FACTORY_WORKERS_' + id, input.workerCount, actor.id, timestamp, true);
       if (change) requests.push(change);
@@ -329,6 +334,17 @@ function saveCatalog(kind, input) {
       if (input.itemFactories !== undefined) {
         requests.push(...itemAssignments_(db, actor, id, input.itemFactories, timestamp));
       }
+      if (input.itemCode !== undefined) {
+        const code = String(input.itemCode).trim() ? requiredText_(input.itemCode, 80) : '';
+        const key = 'ITEM_CODE_' + id;
+        const settings = rows_(db, 'SETTINGS');
+        if (code && settings.some(entry => String(entry[0]).startsWith('ITEM_CODE_') && entry[0] !== key &&
+            String(entry[1]).toLowerCase() === code.toLowerCase())) throw new Error('Item code already exists.');
+        const index = settings.findIndex(entry => entry[0] === key);
+        if ((settings[index]?.[1] ?? '') !== code) requests.push(upsert_(db, 'SETTINGS', index, [key, code, actor.id, timestamp]));
+      }
+      const threshold = forecastSetting_(db, 'ITEM_MINIMUM_' + id, input.minimum, actor.id, timestamp, false);
+      if (threshold) requests.push(threshold);
       const image = input.photo ? storeItemImage_(input.photo) : old?.[6] || '';
       row = [id, name, old?.[2] || '', unit,
         input.pack, input.decimal === true, image, old?.[7] || '', old?.[8] ?? '',
@@ -336,8 +352,8 @@ function saveCatalog(kind, input) {
     } else if (kind === 'USERS') {
       const username = username_(input.username);
       if (!username) throw new Error('Enter a username.');
-      if (!['WORKER', 'SUPERVISOR'].includes(input.role) || old?.[4] === 'ADMIN') {
-        throw new Error('Choose Worker or Supervisor.');
+      if (!['WORKER', 'SUPERVISOR', 'ADMIN'].includes(input.role) || (old && !old[3] && old[4] === 'ADMIN') || id === actor.id) {
+        throw new Error('Choose a role. You cannot edit your own administrator account.');
       }
       if (entries.some(other => other[0] !== id && username_(other[2]) === username)) {
         throw new Error('Username already exists. Select that user to edit or reset their password.');
@@ -376,25 +392,30 @@ function saveCatalog(kind, input) {
       row[9] = timestamp;
     }
     requests.unshift(upsert_(db, kind, index, row));
-    commit_(db, requests);
+    const settingsId = db.getSheetByName('SETTINGS').getSheetId();
+    const insertions = requests.filter(request => request.appendCells?.sheetId === settingsId);
+    if (insertions.length > 1) {
+      insertions[0].appendCells.rows.push(...insertions.slice(1).flatMap(request => request.appendCells.rows));
+    }
+    commit_(db, requests.filter(request => !insertions.slice(1).includes(request)));
     return {id};
   });
 }
 
-function catalog() {
+function catalog(token) {
   const db = database_();
-  principal_(db, ['ADMIN']);
+  principal_(db, ['ADMIN'], token);
   const assignments = rows_(db, 'USER_FACTORIES');
   const settings = new Map(rows_(db, 'SETTINGS').map(row => [row[0], row[1]]));
   return {
-    FACTORIES: rows_(db, 'FACTORIES').map(row => ({id: row[0], name: row[1],
+    FACTORIES: rows_(db, 'FACTORIES').filter(row => !enabled_(settings.get('FACTORY_DELETED_' + row[0]))).map(row => ({id: row[0], name: row[1],
       workerCount: settings.get('FACTORY_WORKERS_' + row[0]) ?? '', active: enabled_(row[2])})),
     ITEMS: rows_(db, 'ITEMS').map(row => ({id: row[0], name: row[1], unit: row[3],
-      pack: row[4], decimal: enabled_(row[5]),
+      pack: row[4], itemCode: settings.get('ITEM_CODE_' + row[0]) || '', minimum: settings.get('ITEM_MINIMUM_' + row[0]) ?? '', decimal: enabled_(row[5]),
       usagePerWorker: settings.get('ITEM_USAGE_PER_WORKER_' + row[0]) ?? '', hasPhoto: Boolean(row[6]), active: enabled_(row[9])})),
-    USERS: rows_(db, 'USERS').filter(row => row[4] !== 'ADMIN').map(row => ({id: row[0], name: row[1], username: row[2],
+    USERS: rows_(db, 'USERS').filter(row => (row[4] !== 'ADMIN' || Boolean(row[3]))).map(row => ({id: row[0], name: row[1], username: row[2],
       role: row[4], active: enabled_(row[5]), factories: assignments.filter(a => a[0] === row[0]).map(a => a[1])})),
-    STOCK: rows_(db, 'STOCK').map(row => ({factory: row[0], item: row[1], active: enabled_(row[8]), estimatedDaily: row[3]}))
+    STOCK: rows_(db, 'STOCK').map(row => ({factory: row[0], item: row[1], active: enabled_(row[8]), estimatedDaily: row[3], quantity:row[2]}))
   };
 }
 
@@ -443,11 +464,14 @@ function stockOverview(factory, token) {
 function history(factory, team, token) {
   const db = database_();
   const actor = principal_(db, team === true ? ['ADMIN', 'SUPERVISOR'] : undefined, token);
-  requireFactory_(db, actor, factory);
+  if (team && actor.role === 'ADMIN') {
+    if (!rows_(db, 'FACTORIES').some(row => row[0] === factory)) throw new Error('Access denied.');
+  } else requireFactory_(db, actor, factory);
   const items = itemMap_(db);
   const selected = team === true ? matchingRows_(db, 'STOCK_LOG', 5, factory, 50) :
     matchingRows_(db, 'STOCK_LOG', 7, actor.id, 100).filter(row => row[4] === factory).slice(0, 50);
   if (!selected.length) return [];
+  const names = team === true ? new Map(rows_(db, 'USERS').map(row => [row[0], row[1]])) : new Map();
   const reversed = new Set(matchingRows_(db, 'STOCK_LOG', 8, 'REVERSAL', Number.MAX_SAFE_INTEGER)
     .filter(row => row[4] === factory).map(row => row[14]));
   return selected.map(row => {
@@ -457,7 +481,8 @@ function history(factory, team, token) {
       unit: item?.[3] || '', quantity: row[9], status: deleted ? 'Deleted' : 'Saved'};
     if (team !== true) return summary;
     const removable = actor.role === 'ADMIN' && !deleted && ['USE', 'RECEIVE', 'OPENING'].includes(row[7]);
-    return {...summary, type: row[7], user: row[6], before: row[10], after: row[11], reason: row[12],
+    return {...summary, type:row[7], user:names.get(row[6]) || row[6], before:row[10], after:row[11],
+      ...(String(row[12]).startsWith('PHOTO:') ? {proofId:row[0]} : {}),
       ...(removable ? {deleteId:row[0]} : {})};
   });
 }
@@ -482,7 +507,8 @@ function postStock(input, token) {
       'Access denied.', 'Invalid request.', 'Check the required fields.', 'Select each item once.',
       'System busy. Retry the same request.', 'Request unavailable.', 'Item unavailable.',
       'Check the quantity. Some items require whole numbers.', 'Please contact your supervisor.',
-      'This item already has stock history.', 'Stock limit reached.'
+      'This item already has stock history.', 'Stock limit reached.', 'Add a proof photo.',
+      'Set a Stock In password in Settings first.', 'Enter the correct Stock In password.', 'Choose a valid item photo.'
     ];
     throw new Error(messages.includes(error.message) ? error.message : 'Could not save. Retry the same request.');
   }
@@ -499,7 +525,7 @@ function postStock_(input, token) {
     .sort((a, b) => a.item.localeCompare(b.item));
   if (new Set(lines.map(line => line.item)).size !== lines.length) throw new Error('Select each item once.');
   const hash = Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256,
-    JSON.stringify([type, input.factory, lines]), Utilities.Charset.UTF_8));
+    JSON.stringify([type, input.factory, lines, input.photo || '']), Utilities.Charset.UTF_8));
   return locked_(() => {
     const db = database_();
     const actor = principal_(db, roles[type], token);
@@ -511,6 +537,8 @@ function postStock_(input, token) {
       }
       return {saved: true};
     }
+    if (type !== 'OPENING' && !input.photo) throw new Error('Add a proof photo.');
+    if (type === 'RECEIVE') checkReceivePassword_(actor, input.receiveProof);
     const stocks = rows_(db, 'STOCK');
     const items = itemMap_(db);
     const timestamp = now_();
@@ -543,6 +571,10 @@ function postStock_(input, token) {
       updates.push(update_(db, 'STOCK', index + 2, stock));
       logs.push([id_(), input.request, timestamp, date, input.factory, line.item, actor.id,
         type, type === 'USE' ? 'USE_NOW' : '', amount, before, after, '', type === 'USE', reference]);
+    }
+    if (input.photo) {
+      const file = storeItemImage_(input.photo);
+      for (const record of logs) record[12] = 'PHOTO:' + file;
     }
     commit_(db, [...updates, append_(db, 'STOCK_LOG', logs), append_(db, 'REQUEST_LOG', [
       [input.request, actor.id, type, hash, 'COMPLETED', reference, timestamp, timestamp, '']
@@ -608,10 +640,15 @@ function itemImage(itemId, factory, token) {
     }
   }
   const item = itemMap_(db).get(itemId);
+  if (!item || !item[6] || (actor.role !== 'ADMIN' && !enabled_(item[9]))) return '';
+  return storedPhoto_(item[6]);
+}
+
+function storedPhoto_(id) {
   const folderId = properties_().getProperty('ITEM_PHOTO_FOLDER');
-  if (!item || !item[6] || !folderId || (actor.role !== 'ADMIN' && !enabled_(item[9]))) return '';
+  if (!folderId || !id) return '';
   try {
-    const file = DriveApp.getFileById(item[6]);
+    const file = DriveApp.getFileById(id);
     const parents = file.getParents();
     while (parents.hasNext()) {
       if (parents.next().getId() !== folderId) continue;
@@ -659,9 +696,9 @@ function forecastSetting_(db, key, value, actor, timestamp, count) {
   return upsert_(db, 'SETTINGS', index, [key, value, actor, timestamp]);
 }
 
-function suggestedBuy() {
+function suggestedBuy(token) {
   const db = database_();
-  const actor = principal_(db, ['ADMIN']);
+  const actor = principal_(db, ['ADMIN'], token);
   const factories = new Map(factoriesFor_(db, actor).map(row => [row[0], row[1]]));
   const items = itemMap_(db);
   const settings = new Map(rows_(db, 'SETTINGS').map(row => [row[0], row[1]]));
@@ -748,9 +785,9 @@ function purchaseEstimate_(daily, stock, incoming, pack, days) {
   };
 }
 
-function previewBuy(input) {
+function previewBuy(input, token) {
   const db = database_();
-  principal_(db, ['ADMIN']);
+  principal_(db, ['ADMIN'], token);
   const {workers, perWorker, stock, incoming, pack} = input || {};
   if (![workers, perWorker, stock, incoming, pack].every(value =>
     typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1e6) ||
@@ -764,8 +801,8 @@ function previewBuy(input) {
 
 const INTERFACE_DEFAULTS = Object.freeze({
   appName:'Smart Stock', factory:'Factory', signIn:'Sign in', adminSignIn:'Admin sign in', signOut:'Sign out',
-  username:'Username', password:'Password', useNow:'Use now', history:'History', home:'Home',
-  stock:'Stock', manage:'Manage', dashboard:'Stock overview', buy:'Suggested Buy',
+  username:'Username', password:'Password', useNow:'Use now', history:'History', home:'Dashboard',
+  stock:'Stock', stockMovement:'Stock In / Out', summary:'Summary', manage:'Settings', dashboard:'Dashboard', buy:'Suggested Buy',
   myHistory:'My history', teamHistory:'Team history', receive:'Receive', opening:'Opening stock',
   search:'Search items', save:'Save', confirm:'Confirm', cancel:'Cancel', saved:'Saved!',
   used:'Used', received:'Received', onHand:'On hand', noItems:'No items yet.', noHistory:'No records yet.'
@@ -782,10 +819,10 @@ function interfaceText() {
   return {defaults:INTERFACE_DEFAULTS, overrides:interfaceOverrides_(rows_(database_(), 'LABELS'))};
 }
 
-function saveInterfaceText(changes) {
+function saveInterfaceText(changes, token) {
   return locked_(() => {
     const db = database_();
-    principal_(db, ['ADMIN']);
+    principal_(db, ['ADMIN'], token);
     if (!changes || typeof changes !== 'object' || Array.isArray(changes)) throw new Error('Check the interface text.');
     const entries = Object.entries(changes);
     if (entries.some(([key, value]) => !Object.hasOwn(INTERFACE_DEFAULTS, key) ||
@@ -812,34 +849,45 @@ function saveInterfaceText(changes) {
 }
 
 // Deactivation keeps inventory keys, assignments and history recoverable.
-function deleteCatalog(kind, id) {
+function deleteCatalog(kind, id, token) {
   if (!['FACTORIES', 'ITEMS'].includes(kind) || typeof id !== 'string' || !id) {
     throw new Error('Invalid request.');
   }
   return locked_(() => {
     const db = database_();
-    principal_(db, ['ADMIN']);
+    const actor = principal_(db, ['ADMIN'], token);
     const rows = rows_(db, kind);
     const index = rows.findIndex(row => row[0] === id);
     if (index < 0) throw new Error('Record unavailable.');
     const row = rows[index];
     const activeColumn = kind === 'FACTORIES' ? 2 : 9;
+    const requests = [];
+    const timestamp = now_();
     if (enabled_(row[activeColumn])) {
       row[activeColumn] = false;
-      row[kind === 'FACTORIES' ? 4 : 11] = now_();
-      commit_(db, [update_(db, kind, index + 2, row)]);
+      row[kind === 'FACTORIES' ? 4 : 11] = timestamp;
+      requests.push(update_(db, kind, index + 2, row));
     }
+    if (kind === 'FACTORIES') {
+      const settings = rows_(db, 'SETTINGS');
+      const key = 'FACTORY_DELETED_' + id;
+      const position = settings.findIndex(setting => setting[0] === key);
+      if (position < 0 || !enabled_(settings[position][1])) {
+        requests.push(upsert_(db, 'SETTINGS', position, [key, true, actor.id, timestamp]));
+      }
+    }
+    if (requests.length) commit_(db, requests);
     return true;
   });
 }
 
 // A reversal applies the opposite movement to today's live balance. Its reference
 // is the original Log_ID, which also makes repeated requests safe.
-function deleteStockRecord(logId) {
+function deleteStockRecord(logId, token) {
   if (typeof logId !== 'string' || !logId) throw new Error('Invalid request.');
   return locked_(() => {
     const db = database_();
-    const actor = principal_(db, ['ADMIN']);
+    const actor = principal_(db, ['ADMIN'], token);
     const [original] = matchingRows_(db, 'STOCK_LOG', 1, logId, 1);
     if (!original || !['USE', 'RECEIVE', 'OPENING'].includes(original[7])) {
       throw new Error('This record cannot be deleted.');
@@ -872,5 +920,108 @@ function deleteStockRecord(logId) {
       append_(db, 'REQUEST_LOG', [[request, actor.id, 'REVERSAL', '', 'COMPLETED', reversal, timestamp, timestamp, '']])
     ]);
     return true;
+  });
+}
+
+function checkReceivePassword_(actor, proof) {
+  const properties = properties_();
+  const expected = properties.getProperty('STOCK_IN_PASSWORD');
+  if (!expected) throw new Error('Set a Stock In password in Settings first.');
+  const key = 'STOCK_IN_TRIES_' + actor.id;
+  throttle_(key, 10, 15);
+  if (!passwordProof_(proof) || !same_(expected, mac_('stock-in|' + proof))) {
+    throw new Error('Enter the correct Stock In password.');
+  }
+  properties.deleteProperty(key);
+}
+
+function companyProfile(token) {
+  const db = database_();
+  principal_(db, undefined, token);
+  const settings = new Map(rows_(db, 'SETTINGS').map(row => [row[0], row[1]]));
+  return {name:settings.get('COMPANY_NAME') || '', logo:storedPhoto_(settings.get('COMPANY_LOGO'))};
+}
+
+function saveCompany(input, token) {
+  return locked_(() => {
+    const db = database_();
+    const actor = principal_(db, ['ADMIN'], token);
+    const name = requiredText_(input?.name, 100);
+    if (input.receiveProof !== undefined && !passwordProof_(input.receiveProof)) throw new Error('Enter a password.');
+    const settings = rows_(db, 'SETTINGS');
+    const timestamp = now_();
+    const requests = [];
+    const inserts = [];
+    const values = [['COMPANY_NAME', name]];
+    if (input.logo) values.push(['COMPANY_LOGO', storeItemImage_(input.logo)]);
+    for (const [key, value] of values) {
+      const index = settings.findIndex(row => row[0] === key);
+      const row = [key, value, actor.id, timestamp];
+      if (index < 0) inserts.push(row);
+      else requests.push(update_(db, 'SETTINGS', index + 2, row));
+    }
+    if (inserts.length) requests.push(append_(db, 'SETTINGS', inserts));
+    commit_(db, requests);
+    if (input.receiveProof) properties_().setProperty('STOCK_IN_PASSWORD', mac_('stock-in|' + input.receiveProof));
+    return true;
+  });
+}
+
+function proofPhoto(logId, token) {
+  const db = database_();
+  const actor = principal_(db, ['ADMIN', 'SUPERVISOR'], token);
+  const [row] = matchingRows_(db, 'STOCK_LOG', 1, String(logId), 1);
+  if (!row) throw new Error('Record unavailable.');
+  if (actor.role !== 'ADMIN') requireFactory_(db, actor, row[4]);
+  const match = /^PHOTO:([a-z0-9_-]+)$/i.exec(String(row[12]));
+  return match ? storedPhoto_(match[1]) : '';
+}
+
+function inventoryReport(factory, token) {
+  const db = database_();
+  const actor = principal_(db, ['ADMIN','SUPERVISOR'], token);
+  const factories = new Map(factoriesFor_(db, actor).map(row => [row[0], row[1]]));
+  if (factory && actor.role !== 'ADMIN' && !factories.has(factory)) throw new Error('Access denied.');
+  if (factory && actor.role === 'ADMIN' && !factories.has(factory)) {
+    const archived = rows_(db, 'FACTORIES').find(row => row[0] === factory);
+    if (!archived) throw new Error('Access denied.');
+    factories.set(archived[0], archived[1]);
+  }
+  const relevant = id => factories.has(id) && (!factory || id === factory);
+  const items = itemMap_(db);
+  const settings = new Map(rows_(db, 'SETTINGS').map(row => [row[0], row[1]]));
+  const ledger = rows_(db, 'STOCK_LOG');
+  const reversed = new Set(ledger.filter(row => row[7] === 'REVERSAL').map(row => row[14]));
+  const today = today_();
+  const start = daysFrom_(today, -28);
+  const recent = daysFrom_(today, -1);
+  const totals = new Map();
+  for (const row of ledger) {
+    if (!relevant(row[4]) || reversed.has(row[0]) || !['USE','RECEIVE','OPENING'].includes(row[7]) || !Number.isFinite(row[9])) continue;
+    const id = JSON.stringify([row[4], row[5]]);
+    if (!totals.has(id)) totals.set(id, {received:0, used:0, opening:0, lastType:'', lastDate:'', days:new Map()});
+    const value = totals.get(id);
+    value.lastType = row[7];
+    value.lastDate = dateKey_(row[3]);
+    if (row[7] === 'RECEIVE') value.received += row[9];
+    if (row[7] === 'OPENING') value.opening += row[9];
+    if (row[7] !== 'USE') continue;
+    value.used += row[9];
+    const day = dateKey_(row[3]);
+    if (day >= start && day < today) value.days.set(day, (value.days.get(day) || 0) + row[9]);
+  }
+  return rows_(db, 'STOCK').flatMap(row => {
+    const [factoryId, id, quantity] = row;
+    const item = items.get(id);
+    if (!relevant(factoryId) || !item || (!factory && (!enabled_(row[8]) || !enabled_(item[9])))) return [];
+    const total = totals.get(JSON.stringify([factoryId, id])) || {received:0, used:0, opening:0, lastType:'', lastDate:'', days:new Map()};
+    const observed = [...total.days.values()];
+    const minimum = within_(settings.get('ITEM_MINIMUM_' + id), 0, 1e6, 0);
+    const daily = observed.length ? round_(observed.reduce((sum, n) => sum + n, 0) / observed.length) : null;
+    const latestRestock = total.lastType === 'RECEIVE' && total.lastDate >= recent;
+    const status = quantity === 0 ? 'OUT' : quantity <= minimum ? 'LOW' : latestRestock ? 'RESTOCKED' : 'OK';
+    return [{...itemView_(item), code:settings.get('ITEM_CODE_' + id) || '', factory:factoryId, factoryName:factories.get(factoryId),
+      quantity, minimum, daily, received:round_(total.received), used:round_(total.used), opening:round_(total.opening),
+      active:enabled_(row[8]) && enabled_(item[9]), status}];
   });
 }

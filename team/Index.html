@@ -20,6 +20,17 @@
     .movement{display:block;font-weight:650}.record-info{color:var(--muted)}
     .record-info summary{padding:.35rem 0;min-height:44px;font-size:.8rem}
     .label-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(13rem,1fr));gap:0 .9rem}
+    .filters{display:grid;grid-template-columns:repeat(auto-fit,minmax(11rem,1fr));gap:.55rem;margin-bottom:.8rem;align-items:start}
+    .filters input,.filters select{width:100%}
+    .product-filter{background:#fff;border:1px solid var(--line);border-radius:12px;padding:0 .65rem}
+    .product-options{max-height:12rem;overflow:auto}
+    .status-tag{font-size:.84rem;font-weight:750;border-radius:8px;padding:.24rem .5rem;display:inline-block}
+    .status-OUT{background:#ffe1df;color:#891e20}.status-LOW{background:#ffedca;color:#733b00}.status-OK{background:#dbf4e7;color:#154f3b}.status-RESTOCKED{background:#e2ebff;color:#234589}
+    .movement-toggle button[aria-pressed=true]{background:var(--blue);color:#fff;border-color:var(--blue)}
+    .stock-number{max-width:55%;overflow-wrap:anywhere}
+    .company-logo{width:42px;height:42px;object-fit:contain;border-radius:8px}
+    #companyName{display:block;font-size:.82rem;color:#d6e5fa;font-weight:500}
+    .proof-image{display:block;max-width:min(100%,24rem);max-height:58vh;object-fit:contain;margin:0 auto 1rem}
     .buy-qty{flex:none;text-align:right;color:var(--blue)}
     .assignment{display:grid;grid-template-columns:1fr minmax(7rem,40%);gap:.6rem;align-items:center;padding:.2rem 0}
     .assignment input[type=number]{width:100%}.thumb svg{width:24px;height:24px}
@@ -85,12 +96,13 @@
 </head>
 <body>
 <header><div class="bar">
-  <div class="brand"><span id="brandIcon" class="mark"></span><span data-text="appName">Smart Stock</span></div>
+  <div class="brand"><span id="brandIcon" class="mark"></span><span><span data-text="appName">Smart Stock</span><small id="companyName" hidden></small></span></div>
   <div class="with-icon"><span id="account"></span><button id="signOut" data-text="signOut" type="button" hidden>Sign out</button></div>
 </div></header>
 <main>
-  <label id="factoryField" style="display:none" hidden><span data-text="factory">Factory</span> <select id="factory"></select></label>
   <nav id="navigation" aria-label="Main"></nav>
+  <div id="movementHeader"></div>
+  <label id="factoryField" style="display:none" hidden><span data-text="factory">Factory</span> <select id="factory"></select></label>
   <p id="message" role="status" aria-live="polite">Loading…</p>
   <section id="page"></section>
   <section class="card" id="login" hidden>
@@ -117,7 +129,9 @@ let token = '';
 let account, current = 'Home', sequence = 0, pending = null, submitting = false;
 const rpc = (name, ...args) => new Promise((resolve, reject) => {
   const run = google.script.run.withSuccessHandler(resolve).withFailureHandler(reject);
-  if (['start', 'factoryItems', 'stockOverview', 'stockSummary', 'itemImage', 'history', 'postStock'].includes(name)) {
+  if (['start','factoryItems','stockOverview','stockSummary','itemImage','history','postStock',
+      'catalog','saveCatalog','suggestedBuy','previewBuy','saveInterfaceText','deleteCatalog','deleteStockRecord',
+      'companyProfile','saveCompany','inventoryReport','proofPhoto'].includes(name)) {
     run[name](...args, token);
   } else {
     run[name](...args);
@@ -164,7 +178,9 @@ function failure(error) {
     'Select assigned factories.', 'Keep your administrator account active.',
     'Enter a username.', 'Enter a password.', 'Enter a new password when changing the username.',
     'Could not prepare the password. Reopen the web app in a current browser and try again.',
-    'Choose Worker or Supervisor.',
+    'Choose Worker or Supervisor.', 'Choose a role. You cannot edit your own administrator account.',
+    'Item code already exists.', 'Add a proof photo.', 'Set a Stock In password in Settings first.',
+    'Enter the correct Stock In password.', 'Check the sample numbers.', 'Login failed.',
     'Username already exists. Select that user to edit or reset their password.',
     'An existing inventory balance uses decimals.', 'Stock limit reached.',
     'Check the factory assignments.', 'Check the factory assignments and daily usage estimates.',
@@ -215,14 +231,14 @@ function routes() {
   if (account.role === 'WORKER') {
     return [[label('useNow', 'Use now'),'use','Use Item'], [label('history', 'History'),'history','My History']];
   }
-  const links = [[label('home','Home'),'home','Home'], [label('stock','Stock'),'box','Stock'],
-    [label('history','History'),'history','Team History']];
-  if (account.role === 'ADMIN') links.push([label('manage','Manage'),'more','Manage']);
+  const links = [[label('home','Dashboard'),'home','Home'], [label('stockMovement','Stock In / Out'),'box','Use Item'],
+    [label('summary','Summary'),'history','Team History']];
+  if (account.role === 'ADMIN') links.push([label('manage','Settings'),'more','Manage']);
   return links;
 }
 function activeRoute(name) {
   if (name.endsWith('History')) return account.role === 'WORKER' ? 'My History' : 'Team History';
-  if (account.role !== 'WORKER' && ['Stock','Stock In','Opening Stock','Use Item'].includes(name)) return 'Stock';
+  if (account.role !== 'WORKER' && ['Stock','Stock In','Opening Stock','Use Item'].includes(name)) return 'Use Item';
   return name;
 }
 function productIcon(name) {
@@ -381,59 +397,160 @@ function renderBuy(result) {
   page.append(section);
 }
 
-function renderSummary(summary, buy) {
-  const cards = el('div', '', 'metrics');
-  for (const [label, value, style] of [
-    ['Factories', summary.length, ''],
-    ['Stock items', summary.reduce((sum, row) => sum + row.items, 0), ''],
-    ['Out of stock', summary.reduce((sum, row) => sum + row.empty, 0), 'warning']
-  ]) {
-    const card = el('div', '', 'metric ' + style);
-    card.append(el('small', label), el('strong', String(value)));
-    cards.append(card);
-  }
-  page.append(cards);
-  if (account.role === 'ADMIN') renderBuy(buy);
-  page.append(el('h3', 'Factory overview', 'section-title'));
-  if (!summary.length) page.append(el('p', 'No active factories yet.', 'muted'));
-  if (summary.length) {
-    const list = el('div', '', 'list');
-    for (const entry of summary) {
-      const row = el('div', '', 'item');
-      row.append(product(entry.name, entry.items + ' stock items · ' + entry.empty + ' out of stock', 'factory'),
-        button(label('stock', 'Stock'), () => { factory.value = entry.id; openPage('Stock'); }));
-      list.append(row);
-    }
-    page.append(list);
-  }
+const stockStatus = {OUT:'Out of stock', LOW:'Restock', RESTOCKED:'Restocked', OK:'In stock'};
+function statusTag(status) {
+  return el('span', stockStatus[status], 'status-tag status-' + status);
 }
+function renderDashboard(rows, buy) {
+  const filters = el('div', '', 'filters');
+  const factorySelect = el('select');
+  factorySelect.setAttribute('aria-label', 'Filter by factory');
+  factorySelect.append(new Option('All factories',''), ...account.factories.map(entry => new Option(entry.name, entry.id)));
+  const status = el('select');
+  status.setAttribute('aria-label', 'Filter by status');
+  status.append(new Option('All statuses',''), ...Object.entries(stockStatus).map(([key, value]) => new Option(value,key)));
+  const products = el('details', '', 'product-filter');
+  const caption = el('summary', 'All products');
+  const search = el('input');
+  search.type = 'search';
+  search.placeholder = 'Search products';
+  search.setAttribute('aria-label', 'Search products');
+  const options = el('div', '', 'product-options');
+  const selected = new Set();
+  const items = new Map(rows.map(row => [row.id, {name:row.name, code:row.code}]));
+  const result = el('div');
+  const refill = () => {
+    const term = search.value.toLowerCase().trim();
+    options.replaceChildren(...[...items].filter(([, item]) => (item.name + ' ' + item.code).toLowerCase().includes(term)).map(([id, {name}]) => {
+      const row = el('label', name);
+      const check = el('input');
+      check.type = 'checkbox';
+      check.checked = selected.has(id);
+      check.onchange = () => {
+        if (check.checked) selected.add(id);
+        else selected.delete(id);
+        caption.textContent = selected.size ? selected.size + ' products selected' : 'All products';
+        draw();
+      };
+      row.prepend(check);
+      return row;
+    }));
+  };
+  function draw() {
+    const filtered = rows.filter(row => (!factorySelect.value || row.factory === factorySelect.value) &&
+      (!status.value || row.status === status.value) && (!selected.size || selected.has(row.id)));
+    const list = el('div', '', 'list');
+    for (const row of filtered.sort((a,b) => a.factoryName.localeCompare(b.factoryName) || ['OUT','LOW','RESTOCKED','OK'].indexOf(a.status) - ['OUT','LOW','RESTOCKED','OK'].indexOf(b.status) || a.quantity - b.quantity)) {
+      const line = el('div', '', 'item');
+      const amount = el('div', '', 'stock-number');
+      amount.append(statusTag(row.status), el('strong', displayQuantity(row.quantity,row.unit)),
+        el('small', 'Minimum: ' + displayQuantity(row.minimum,row.unit)));
+      line.append(product(row.name,row.factoryName,productIcon(row.name),row),amount);
+      list.append(line);
+    }
+    result.replaceChildren(filtered.length ? list : el('p','No products match these filters.','muted'));
+  }
+  search.oninput = refill;
+  factorySelect.onchange = status.onchange = draw;
+  products.append(caption, search, options);
+  filters.append(factorySelect, status, products);
+  page.append(filters, result);
+  draw();
+  refill();
+  if (account.role === 'ADMIN') renderBuy(buy);
+}
+
+function renderMovementControls(name) {
+  const controls = el('div', '', 'actions movement-toggle');
+  for (const [target, caption] of [['Use Item','Stock Out'],['Stock In','Stock In']]) {
+    const control = button(caption, () => openPage(target));
+    control.setAttribute('aria-pressed', String(target === name));
+    controls.append(control);
+  }
+  if (account.role === 'ADMIN') controls.append(button('Opening stock', () => openPage('Opening Stock')));
+  byId('movementHeader').append(controls);
+  page.append(el('p', 'Recorded by: ' + account.name, 'muted'));
+}
+
+function renderFactorySummary(entries) {
+  const active = entries.filter(row => row.active);
+  const groups = new Map();
+  for (const row of entries) {
+    const unit = readableUnit(row.unit) || 'No unit';
+    const totals = groups.get(unit) || {received:0, used:0, onHand:0};
+    totals.received += row.received;
+    totals.used += row.used;
+    totals.onHand += row.quantity;
+    groups.set(unit, totals);
+  }
+  page.append(el('p', active.length + (active.length === 1 ? ' active product' : ' active products'), 'muted'));
+  if (groups.size) {
+    const totals = el('div', '', 'card');
+    totals.append(el('strong', 'Total movements'));
+    const format = new Intl.NumberFormat('en', {maximumFractionDigits:6});
+    for (const [unit, value] of groups) {
+      totals.append(el('div', unit + ' · On hand: ' + format.format(value.onHand) + ' · In: ' + format.format(value.received) + ' · Out: ' + format.format(value.used)));
+    }
+    page.append(totals);
+  }
+  if (!entries.length) {
+    page.append(el('p', 'No stock records for this factory.', 'muted'));
+    return;
+  }
+  const list = el('div', '', 'list');
+  for (const row of entries) {
+    const line = el('div', '', 'item');
+    const numbers = el('div', '', 'stock-number');
+    numbers.append(el('strong', displayQuantity(row.quantity,row.unit)),
+      el('small', 'In: ' + displayQuantity(row.received,row.unit)),
+      el('small', 'Out: ' + displayQuantity(row.used,row.unit)));
+    line.append(product(row.name,row.code || (row.active ? '' : 'Inactive'),productIcon(row.name),row),numbers);
+    list.append(line);
+  }
+  page.append(list, el('h3','Recent movements','section-title'));
+}
+
+function updateFactoryOptions(name) {
+  if (!account) return;
+  const selection = factory.value;
+  const entries = name === 'Team History' ? [...account.factories, ...(account.archivedFactories || []).map(row => ({...row, name:row.name + ' (inactive)'}))] : account.factories;
+  factory.replaceChildren(...entries.map(row => new Option(row.name,row.id)));
+  if (entries.some(row => row.id === selection)) factory.value = selection;
+  byId('factoryField').style.display = entries.length ? '' : 'none';
+  byId('factoryField').hidden = !entries.length || ['Home','Manage'].includes(name);
+}
+
 async function openPage(name) {
   if (submitting) return;
   current = name;
   const version = ++sequence;
+  byId('movementHeader').replaceChildren();
   byId('navigation').replaceChildren(...routes().map(([caption, symbol, route]) => {
     const control = iconButton(caption, symbol, () => openPage(route));
     if (route === activeRoute(name)) control.setAttribute('aria-current', 'page');
     return control;
   }));
   const title = {
-    Home:label('dashboard','Stock overview'), 'Use Item':label('useNow','Use now'),
-    Stock:label('stock','Stock'), Manage:label('manage','Manage'),
-    'Stock In':label('receive','Receive'), 'Opening Stock':label('opening','Opening stock'),
-    'My History':label('myHistory','My history'), 'Team History':label('teamHistory','Team history')
+    Home:label('dashboard','Dashboard'), 'Use Item':account.role === 'WORKER' ? label('useNow','Use now') : 'Stock Out',
+    Manage:label('manage','Settings'),
+    'Stock In':'Stock In', 'Opening Stock':label('opening','Opening stock'),
+    'My History':label('myHistory','My history'), 'Team History':label('summary','Summary')
   }[name];
   page.replaceChildren(el('h2', title));
-  byId('factoryField').hidden = !account.factories.length || ['Home', 'Manage'].includes(name);
+  updateFactoryOptions(name);
+  if (account.role !== 'WORKER' && ['Use Item','Stock In','Opening Stock'].includes(name)) {
+    renderMovementControls(name);
+  }
   message('');
   try {
     if (name === 'Home') {
       message('Loading…');
       const [summary, buy] = await Promise.all([
-        rpc('stockSummary'),
+        rpc('inventoryReport', ''),
         account.role === 'ADMIN' ? rpc('suggestedBuy').catch(() => null) : null
       ]);
       if (version === sequence) {
-        renderSummary(summary, buy);
+        renderDashboard(summary, buy);
         message('');
       }
       return;
@@ -446,28 +563,23 @@ async function openPage(name) {
     if (name === 'Manage') {
       const data = await rpc('catalog');
       if (version === sequence) renderCatalog(data);
-    } else if (name === 'Stock') {
-      const items = await rpc('stockOverview', factory.value);
-      if (version === sequence) {
-        const actions = el('div', '', 'actions');
-        actions.append(iconButton(label('useNow','Use now'),'use',() => openPage('Use Item')),
-          iconButton(label('receive','Receive'),'box',() => openPage('Stock In')));
-        if (account.role === 'ADMIN') actions.append(button(label('opening','Opening stock'), () => openPage('Opening Stock')));
-        page.append(actions);
-        renderStock(items);
-      }
     } else if (name.endsWith('History')) {
-      if (account.role !== 'WORKER') {
-        const actions = el('div', '', 'actions');
-        actions.append(button(name === 'Team History' ? label('myHistory','My history') : label('teamHistory','Team history'),
-          () => openPage(name === 'Team History' ? 'My History' : 'Team History')));
-        page.append(actions);
+      const team = name === 'Team History';
+      const [records, totals] = await Promise.all([
+        rpc('history', factory.value, team),
+        team ? rpc('inventoryReport', factory.value) : null
+      ]);
+      if (version === sequence) {
+        if (totals) renderFactorySummary(totals);
+        renderHistory(records);
       }
-      const rows = await rpc('history', factory.value, name === 'Team History');
-      if (version === sequence) renderHistory(rows);
     } else {
-      const items = await rpc('factoryItems', factory.value);
-      if (version === sequence) renderEntry(items, {'Use Item':'USE','Stock In':'RECEIVE','Opening Stock':'OPENING'}[name]);
+      const privileged = account.role !== 'WORKER';
+      const items = privileged ? (await rpc('inventoryReport', factory.value)).filter(row => row.active) :
+        await rpc('factoryItems', factory.value);
+      if (version === sequence) {
+        renderEntry(items, {'Use Item':'USE','Stock In':'RECEIVE','Opening Stock':'OPENING'}[name]);
+      }
     }
     if (version === sequence) message('');
   } catch (error) {
@@ -480,22 +592,6 @@ function readableUnit(value) {
 }
 function displayQuantity(quantity, unit) {
   return [String(quantity), readableUnit(unit)].filter(Boolean).join(' ');
-}
-function renderStock(items) {
-  if (!items.length) {
-    page.append(el('p', label('noItems','No items yet.'), 'muted'));
-    return;
-  }
-  const list = el('div', '', 'list');
-  for (const item of items) {
-    const row = el('div', '', 'item');
-    const quantity = el('div', '', 'stock-number');
-    quantity.append(el('strong', displayQuantity(item.quantity, item.unit)),
-      el('small', label('onHand','On hand')));
-    row.append(product(item.name, '', productIcon(item.name), item), quantity);
-    list.append(row);
-  }
-  page.append(list);
 }
 function displayDate(value) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
@@ -513,7 +609,7 @@ function renderHistory(records) {
     OPENING:label('opening','Opening stock'), REVERSAL:'Stock correction'};
   for (const record of records) {
     const row = el('div', '', 'item');
-    row.append(product(record.name, displayDate(record.date)));
+    row.append(product(record.name, [displayDate(record.date),record.user].filter(Boolean).join(' · ')));
     const info = el('div', '', 'stock-number');
     const action = actions[record.type] || label('used','Used');
     info.append(el('span', action + ' ' + displayQuantity(record.quantity, record.unit), 'movement'));
@@ -523,6 +619,7 @@ function renderHistory(records) {
       details.append(el('summary','Stock change'), el('small', String(record.before) + ' → ' + String(record.after)));
       info.append(details);
     }
+    if (record.proofId) info.append(button('View photo', () => showProof(record.proofId)));
     if (record.deleteId) {
       const remove = button('Delete record', async () => {
         if (!window.confirm('Delete this record and reverse its stock change?')) return;
@@ -535,6 +632,25 @@ function renderHistory(records) {
   }
   page.append(list);
 }
+async function showProof(logId) {
+  try {
+    const source = await rpc('proofPhoto', logId);
+    if (!source) { message('Photo unavailable.', true); return; }
+    const modal = el('dialog');
+    modal.setAttribute('aria-label','Stock movement photo');
+    const image = el('img');
+    image.className = 'proof-image';
+    image.alt = 'Stock movement proof';
+    image.src = source;
+    modal.append(image, button('Close', () => modal.close()));
+    modal.addEventListener('close', () => modal.remove(), {once:true});
+    document.body.append(modal);
+    modal.showModal();
+  } catch (error) {
+    failure(error);
+  }
+}
+
 function renderEntry(items, type) {
   if (!items.length) {
     page.append(el('p', label('noItems','No items yet.')));
@@ -552,18 +668,40 @@ function renderEntry(items, type) {
   const feedback = el('p', '', 'entry-feedback');
   feedback.id = 'entryFeedback';
   feedback.setAttribute('aria-hidden', 'true');
-  const save = iconButton(label('save','Save'), 'check', () => {
+  const attachment = el('input');
+  attachment.type = 'file';
+  attachment.accept = 'image/*';
+  attachment.setAttribute('capture','environment');
+  const receivePassword = el('input');
+  receivePassword.type = 'password';
+  receivePassword.autocomplete = 'off';
+  const save = iconButton(label('save','Save'), 'check', async () => {
     const lines = items.map(item => ({item:item.id, quantity:Number(values.get(item.id) || 0)}))
       .filter(line => line.quantity !== 0);
     if (!lines.length || lines.some(line => !Number.isFinite(line.quantity) || line.quantity < 0)) {
       message('Enter a positive quantity.', true);
       return;
     }
+    if (type !== 'OPENING' && !attachment.files[0]) { message('Add a proof photo.', true); return; }
+    if (type === 'RECEIVE' && !receivePassword.value) { message('Enter the Stock In password.', true); return; }
+    const version = sequence;
     const payload = {type, factory:factory.value, lines};
-    const signature = JSON.stringify(payload);
+    save.disabled = true;
+    try {
+      if (type !== 'OPENING') payload.photo = await thumbnail(attachment.files[0], 480);
+      if (type === 'RECEIVE') payload.receiveProof = await preparePassword('stock-receive',receivePassword.value);
+    } catch (error) {
+      if (version === sequence) failure(error);
+      return;
+    } finally {
+      refreshSave();
+    }
+    if (version !== sequence) return;
+    const signature = JSON.stringify([payload.type,payload.factory,payload.lines,payload.photo]);
     if (pending?.signature !== signature) {
       pending = {signature, payload:{...payload, request:crypto.randomUUID()}};
     }
+    pending.payload.receiveProof = payload.receiveProof ?? '';
     byId('summary').replaceChildren(...lines.map(line => {
       const item = items.find(row => row.id === line.item);
       return el('li', item.name + ' · ' + displayQuantity(line.quantity, item.unit));
@@ -575,10 +713,14 @@ function renderEntry(items, type) {
       byId('confirm').disabled = true;
       byId('cancel').disabled = true;
       message('Saving…');
+      let saved = false;
       try {
         await rpc('postStock', pending.payload);
+        saved = true;
         pending = null;
         values.clear();
+        attachment.value = '';
+        receivePassword.value = '';
         paint();
         message(label('saved','Saved!'));
       } catch (error) {
@@ -588,6 +730,10 @@ function renderEntry(items, type) {
         byId('confirm').disabled = false;
         byId('cancel').disabled = false;
         dialog.close();
+      }
+      if (saved && account.role !== 'WORKER') {
+        await openPage(current);
+        message(type === 'RECEIVE' ? 'Restocked. Current balances are shown below.' : label('saved','Saved!'));
       }
     };
   }, 'primary full');
@@ -600,7 +746,11 @@ function renderEntry(items, type) {
     const query = search.value.trim().toLowerCase();
     list.replaceChildren(...items.filter(item => item.name.toLowerCase().includes(query)).map(item => {
       const row = el('div', '', 'item');
-      const itemName = product(item.name, readableUnit(item.unit), productIcon(item.name), item);
+      const detail = item.quantity === undefined ? readableUnit(item.unit) :
+        [displayQuantity(item.quantity,item.unit) + ' on hand', 'Minimum: ' + displayQuantity(item.minimum,item.unit),
+          item.daily === null ? 'No usage average yet' : 'Avg. on recorded days: ' + displayQuantity(item.daily,item.unit) + '/day'].join(' · ');
+      const itemName = product(item.name, detail, productIcon(item.name), item);
+      if (item.status && item.status !== 'OK') itemName.lastElementChild.append(statusTag(item.status));
       const input = el('input');
       input.type = 'number';
       input.inputMode = 'decimal';
@@ -636,16 +786,29 @@ function renderEntry(items, type) {
   search.oninput = paint;
   paint();
   footer.append(selection, save, feedback);
-  page.append(search, list, footer);
+  page.append(search, list);
+  if (type !== 'OPENING') {
+    const proof = el('div', '', 'card');
+    const photo = el('label', 'Proof photo');
+    photo.append(attachment);
+    proof.append(photo);
+    if (type === 'RECEIVE') {
+      const password = el('label', 'Stock In password');
+      password.append(receivePassword);
+      proof.append(password);
+    }
+    page.append(proof);
+  }
+  page.append(footer);
 }
-async function thumbnail(file) {
+async function thumbnail(file, maxSize = 300) {
   if (file.size > 20 * 1024 * 1024) throw new Error('Choose a valid item photo.');
   const url = URL.createObjectURL(file);
   try {
     const image = new Image();
     image.src = url;
     await image.decode();
-    const scale = Math.min(1, 300 / Math.max(image.naturalWidth, image.naturalHeight));
+    const scale = Math.min(1, maxSize / Math.max(image.naturalWidth, image.naturalHeight));
     const canvas = el('canvas');
     canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
     canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
@@ -692,7 +855,7 @@ function interfaceSettings() {
     signOut:'Sign-out button', username:'Username field', password:'Password field',
     useNow:'Use menu', history:'History menu', home:'Home menu', stock:'Stock menu', manage:'Manage menu',
     dashboard:'Dashboard title', buy:'Suggested Buy title', myHistory:'My history title',
-    teamHistory:'Team history title', receive:'Receive button', opening:'Opening stock button',
+    teamHistory:'Team history title', stockMovement:'Stock In / Out menu', summary:'Summary menu', receive:'Receive button', opening:'Opening stock button',
     search:'Search field', save:'Save button', confirm:'Confirm button', cancel:'Cancel button',
     saved:'Saved message', used:'Used label', received:'Received label', onHand:'Stock quantity label',
     noItems:'Empty item list', noHistory:'Empty history'
@@ -736,9 +899,8 @@ function interfaceSettings() {
 }
 
 function renderCatalog(data) {
-  const kinds = {FACTORIES:'Factories', ITEMS:'Items', USERS:'User accounts'};
+  const kinds = {USERS:'User accounts', FACTORIES:'Factories', ITEMS:'Items'};
   for (const [kind, title] of Object.entries(kinds)) {
-    if (kind === 'USERS') page.append(interfaceSettings());
     const card = el('details', '', 'card');
     card.name = 'manage';
     card.id = 'manage-' + kind;
@@ -775,7 +937,11 @@ function renderCatalog(data) {
         fields.workerCount.placeholder = 'e.g. 50';
       }
       if (kind === 'ITEMS') {
+        field('itemCode','Item code','text',row.itemCode);
         field('unit','Unit (e.g. roll, bottle)','text',row.unit);
+        field('minimum','Minimum stock','number',row.minimum);
+        fields.minimum.min = '0';
+        fields.minimum.step = 'any';
         field('pack','Pack size','number',row.pack ?? 1);
         fields.pack.step = 'any';
         field('decimal','Allow decimals','checkbox',row.decimal);
@@ -809,6 +975,7 @@ function renderCatalog(data) {
           daily.setAttribute('aria-label', entry.name + ' estimated units per day');
           assigned.onchange = () => { daily.disabled = !assigned.checked; };
           label.prepend(assigned);
+          if (existing) label.append(el('small', 'In stock: ' + displayQuantity(existing.quantity,row.unit)));
           line.append(label, daily);
           form.append(line);
           itemAssignments.push({factory:entry.id, assigned, daily});
@@ -824,7 +991,7 @@ function renderCatalog(data) {
         fields.password.autocomplete = 'new-password';
         fields.password.required = !row.id;
         if (row.id) form.append(el('p', 'Leave the password blank to keep it. Enter a new password if you change the username.', 'muted'));
-        field('role','Role','select',row.role || 'WORKER',[['WORKER','Worker'],['SUPERVISOR','Supervisor']]);
+        field('role','Role','select',row.role || 'WORKER',[['WORKER','Worker'],['SUPERVISOR','Supervisor'],['ADMIN','Admin']]);
         const activeFactories = data.FACTORIES.filter(f => f.active);
         form.append(el('h3', 'Assigned factories', 'section-title'));
         if (!activeFactories.length) form.append(el('p', 'Create an active factory under Factories first.', 'muted'));
@@ -836,7 +1003,7 @@ function renderCatalog(data) {
       const save = el('button',label('save','Save'),'primary');
       const controls = el('div', '', 'actions');
       controls.append(save);
-      if (row.id && row.active && kind !== 'USERS') {
+      if (row.id && kind !== 'USERS') {
         const noun = kind === 'ITEMS' ? 'item' : 'factory';
         const remove = button('Delete ' + noun, async () => {
           if (!window.confirm('Delete ' + row.name + ' from active lists? Its history will be kept.')) return;
@@ -853,11 +1020,11 @@ function renderCatalog(data) {
           if (key === 'photo' || key === 'password') continue;
           if (key.startsWith('factory:')) {
             if (node.checked) input.factories.push(key.slice(8));
-          } else if (key === 'workerCount' || key === 'usagePerWorker') {
+          } else if (key === 'workerCount' || key === 'usagePerWorker' || key === 'minimum') {
             input[key] = node.value === '' ? '' : Number(node.value);
           } else input[key] = node.type === 'checkbox' ? node.checked : node.type === 'number' ? Number(node.value) : node.value;
         }
-        if (kind === 'USERS' && input.active && !input.factories.length) {
+        if (kind === 'USERS' && input.role !== 'ADMIN' && input.active && !input.factories.length) {
           message('Select at least one factory for this user.', true);
           save.disabled = false;
           return;
@@ -897,6 +1064,78 @@ function renderCatalog(data) {
     card.append(el('summary', title), picker, editor);
     page.append(card);
   }
+  page.append(interfaceSettings(), companySettings());
+}
+
+function companySettings() {
+  const card = el('details', '', 'card');
+  card.name = 'manage';
+  card.append(el('summary','Company'));
+  const form = el('form');
+  const name = el('input');
+  const logo = el('input');
+  const password = el('input');
+  const save = el('button','Save','primary');
+  name.value = company.name || '';
+  name.required = true;
+  logo.type = 'file';
+  logo.accept = 'image/*';
+  password.type = 'password';
+  password.autocomplete = 'new-password';
+  for (const [caption, input] of [['Company name',name], ['Company logo',logo], ['Set Stock In password',password]]) {
+    const field = el('label',caption);
+    field.append(input);
+    form.append(field);
+  }
+  form.append(el('p','Leave the password blank to keep it. Staff enter this password when receiving stock.','muted'),save);
+  card.append(form);
+  form.onsubmit = async event => {
+    event.preventDefault();
+    save.disabled = true;
+    const version = sequence;
+    try {
+      const input = {name:name.value};
+      if (logo.files[0]) input.logo = await thumbnail(logo.files[0]);
+      if (password.value) input.receiveProof = await preparePassword('stock-receive',password.value);
+      if (version !== sequence) return;
+      await rpc('saveCompany', input);
+      if (version !== sequence) return;
+      await refreshCompany();
+      password.value = '';
+      logo.value = '';
+      message(label('saved','Saved!'));
+    } catch (error) {
+      if (version === sequence) failure(error);
+    } finally {
+      save.disabled = false;
+    }
+  };
+  return card;
+}
+let company = {};
+function paintCompany(profile) {
+  company = profile;
+  const text = byId('companyName');
+  text.textContent = profile.name || '';
+  text.hidden = !profile.name;
+  const mark = byId('brandIcon');
+  mark.replaceChildren(icon('box'));
+  if (profile.logo) {
+    const image = el('img');
+    image.className = 'company-logo';
+    image.alt = '';
+    image.src = profile.logo;
+    mark.replaceChildren(image);
+  }
+}
+async function refreshCompany() {
+  const signedIn = account;
+  try {
+    const profile = await rpc('companyProfile');
+    if (account === signedIn) paintCompany(profile);
+  } catch (error) {
+    // Branding is optional for the stock workflow.
+  }
 }
 function populate(value) {
   const selection = factory.value;
@@ -933,9 +1172,11 @@ function loggedOut(text = '') {
   byId('summary').replaceChildren();
   if (dialog.open) dialog.close();
   account = undefined;
+  paintCompany({});
   ++sequence;
   page.replaceChildren();
   byId('navigation').replaceChildren();
+  byId('movementHeader').replaceChildren();
   byId('factoryField').style.display = 'none';
   byId('account').textContent = '';
   byId('signOut').hidden = true;
@@ -945,6 +1186,7 @@ function loggedOut(text = '') {
 async function enter() {
   await wordingReady;
   populate(await rpc('start'));
+  await refreshCompany();
   byId('login').hidden = true;
   byId('signOut').hidden = false;
   return openPage(account.role === 'WORKER' ? 'Use Item' : 'Home');
