@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <style>
+    *{box-sizing:border-box}
+    body{margin:0;background:#f8fafc;color:#1e293b;font:16px system-ui,sans-serif}
+    main{max-width:28rem;margin:3rem auto;padding:1rem}
+    form{background:white;border:1px solid #e2e8f0;border-radius:1rem;padding:1.25rem}
+    h1{margin:0 0 1.25rem;font-size:1.4rem}
+    label{display:block;margin-bottom:1rem}
+    select,input,button{display:block;width:100%;min-height:44px;border-radius:.6rem;padding:.6rem;font:inherit}
+    select,input{border:1px solid #94a3b8;margin-top:.35rem;background:white;color:inherit}
+    button{border:0;background:#2563eb;color:white;font-weight:600}
+    button:disabled{opacity:.55}
+    #status{margin:1rem 0 0;min-height:1.4rem;color:#166534}
+    #status.error{color:#b91c1c}
+  </style>
+</head>
+<body>
+  <main>
+    <form id="entry">
+      <h1>领用登记</h1>
+      <label>物品 <select id="item" required><option value="">请选择</option></select></label>
+      <label>数量 <input id="quantity" type="number" inputmode="numeric" min="1" max="1000000" step="1" required></label>
+      <button id="save" disabled>保存</button>
+      <p id="status" role="status" aria-live="polite">正在读取物品…</p>
+    </form>
+  </main>
+  <script>
+    const item = document.getElementById('item');
+    const quantity = document.getElementById('quantity');
+    const save = document.getElementById('save');
+    const status = document.getElementById('status');
+    let pending;
+    function show(message, error = false) {
+      status.textContent = message;
+      status.className = error ? 'error' : '';
+    }
+    google.script.run.withSuccessHandler(items => {
+      items.forEach(name => item.add(new Option(name, name)));
+      save.disabled = !items.length;
+      show(items.length ? '' : '请先到 Sheet 的「试用物品」分页，在 A2 开始填物品名称。');
+    }).withFailureHandler(error => show(error.message || '读取失败，请刷新网页。', true)).listItems();
+
+    document.getElementById('entry').addEventListener('submit', event => {
+      event.preventDefault();
+      if (save.disabled) return;
+      const name = item.value;
+      const amount = Number(quantity.value);
+      if (!pending || pending.name !== name || pending.amount !== amount) {
+        pending = {id: crypto.randomUUID(), name, amount};
+      }
+      item.disabled = quantity.disabled = save.disabled = true;
+      show('正在保存…');
+      const unlock = () => { item.disabled = quantity.disabled = save.disabled = false; };
+      google.script.run.withSuccessHandler(() => {
+        pending = undefined;
+        item.value = quantity.value = '';
+        unlock();
+        show('已保存！');
+      }).withFailureHandler(error => {
+        unlock();
+        show(error.message || '保存失败，请再按一次保存。', true);
+      }).saveUsage(pending.id, name, amount);
+    });
+  </script>
+</body>
+</html>
