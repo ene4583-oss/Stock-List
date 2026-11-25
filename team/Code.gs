@@ -299,6 +299,8 @@ function saveCatalog(kind, input) {
     const requests = [];
     if (kind === 'FACTORIES') {
       row = [id, requiredText_(input.name), input.active === true, old?.[3] || timestamp, timestamp];
+      const change = forecastSetting_(db, 'FACTORY_WORKERS_' + id, input.workerCount, actor.id, timestamp, true);
+      if (change) requests.push(change);
     } else if (kind === 'ITEMS') {
       if (!Number.isFinite(input.pack) || input.pack <= 0 ||
           (!input.decimal && !Number.isInteger(input.pack))) throw new Error('Invalid pack size.');
@@ -307,6 +309,8 @@ function saveCatalog(kind, input) {
       }
       const name = requiredText_(input.name);
       const unit = requiredText_(input.unit, 30);
+      const change = forecastSetting_(db, 'ITEM_USAGE_PER_WORKER_' + id, input.usagePerWorker, actor.id, timestamp, false);
+      if (change) requests.push(change);
       if (input.itemFactories !== undefined) {
         requests.push(...itemAssignments_(db, actor, id, input.itemFactories, timestamp));
       }
@@ -361,10 +365,13 @@ function catalog() {
   const db = database_();
   principal_(db, ['ADMIN']);
   const assignments = rows_(db, 'USER_FACTORIES');
+  const settings = new Map(rows_(db, 'SETTINGS').map(row => [row[0], row[1]]));
   return {
-    FACTORIES: rows_(db, 'FACTORIES').map(row => ({id: row[0], name: row[1], active: enabled_(row[2])})),
+    FACTORIES: rows_(db, 'FACTORIES').map(row => ({id: row[0], name: row[1],
+      workerCount: settings.get('FACTORY_WORKERS_' + row[0]) ?? '', active: enabled_(row[2])})),
     ITEMS: rows_(db, 'ITEMS').map(row => ({id: row[0], name: row[1], unit: row[3],
-      pack: row[4], decimal: enabled_(row[5]), hasPhoto: Boolean(row[6]), active: enabled_(row[9])})),
+      pack: row[4], decimal: enabled_(row[5]),
+      usagePerWorker: settings.get('ITEM_USAGE_PER_WORKER_' + row[0]) ?? '', hasPhoto: Boolean(row[6]), active: enabled_(row[9])})),
     USERS: rows_(db, 'USERS').filter(row => row[4] !== 'ADMIN').map(row => ({id: row[0], name: row[1], username: row[2],
       role: row[4], active: enabled_(row[5]), factories: assignments.filter(a => a[0] === row[0]).map(a => a[1])})),
     STOCK: rows_(db, 'STOCK').map(row => ({factory: row[0], item: row[1], active: enabled_(row[8]), estimatedDaily: row[3]}))
@@ -613,6 +620,19 @@ function within_(value, min, max, fallback) {
   return value !== '' && value != null && Number.isFinite(number) && number >= min && number <= max ? number : fallback;
 }
 
+function forecastSetting_(db, key, value, actor, timestamp, count) {
+  if (value === undefined) return null;
+  if (value !== '' && (typeof value !== 'number' || !Number.isFinite(value) ||
+      value < 0 || value > 1000000 || (count && !Number.isInteger(value)))) {
+    throw new Error(count ? 'Enter a whole number of workers, or leave it blank.' :
+      'Enter a valid daily usage per worker, or leave it blank.');
+  }
+  const rows = rows_(db, 'SETTINGS');
+  const index = rows.findIndex(row => row[0] === key);
+  if ((rows[index]?.[1] ?? '') === value) return null;
+  return upsert_(db, 'SETTINGS', index, [key, value, actor, timestamp]);
+}
+
 function suggestedBuy() {
   const db = database_();
   const actor = principal_(db, ['ADMIN']);
@@ -652,15 +672,25 @@ function suggestedBuy() {
   }
   const recommendations = [];
   let insufficient = 0;
+  let missingWorkerCount = 0;
   for (const stock of rows_(db, 'STOCK')) {
     const [factory, itemId, quantity, estimated] = stock;
     const item = items.get(itemId);
     if (!factories.has(factory) || !enabled_(stock[8]) || !item || !enabled_(item[9])) continue;
     const identity = key(factory, itemId);
     const days = usageDays.get(identity) || new Map();
+    const perWorker = within_(settings.get('ITEM_USAGE_PER_WORKER_' + itemId), 0, 1000000, null);
+    const workerCount = within_(settings.get('FACTORY_WORKERS_' + factory), 0, 1000000, null);
+    if (perWorker !== null && !Number.isInteger(workerCount)) {
+      missingWorkerCount++;
+      continue;
+    }
     const historical = days.size >= 7;
-    const daily = historical ? [...days.values()].reduce((sum, used) => sum + Math.max(0, used), 0) / days.size :
-      within_(estimated, 0.000001, 1e9, null);
+    const daily = perWorker !== null ? workerCount * perWorker :
+      historical ? [...days.values()].reduce((sum, used) => sum + Math.max(0, used), 0) / days.size :
+        within_(estimated, 0.000001, 1e9, null);
+    const basis = perWorker !== null ? workerCount + ' workers × ' + perWorker + '/day (estimate)' :
+      historical ? days.size + ' observed days' : 'Estimated usage';
     if (daily === null || !Number.isFinite(quantity) || quantity < 0) {
       insufficient++;
       continue;
@@ -676,8 +706,8 @@ function suggestedBuy() {
     recommendations.push({...itemView_(item), factory, factoryName:factories.get(factory),
       quantity, suggested:round_(Math.ceil(gap / pack - 1e-9) * pack),
       daysLeft:daily > 0 ? Math.round(quantity / daily * 10) / 10 : null,
-      basis:historical ? days.size + ' observed days' : 'Estimated usage'});
+      basis});
   }
   recommendations.sort((a, b) => (a.daysLeft ?? Infinity) - (b.daysLeft ?? Infinity));
-  return {recommendations, insufficient};
+  return {recommendations, insufficient, missingWorkerCount};
 }

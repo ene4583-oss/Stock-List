@@ -126,6 +126,8 @@ function failure(error) {
     'Username already exists. Select that user to edit or reset their password.',
     'An existing inventory balance uses decimals.', 'Stock limit reached.',
     'Check the factory assignments.', 'Check the factory assignments and daily usage estimates.',
+    'Enter a whole number of workers, or leave it blank.',
+    'Enter a valid daily usage per worker, or leave it blank.',
     'Choose a valid item photo.', 'Could not open that photo. Try a JPG or PNG.'
   ];
   message(publicErrors.includes(text) ? text : 'Could not complete the request. Retry from this page.', true);
@@ -238,6 +240,9 @@ function renderBuy(result) {
   section.append(results);
   if (result.insufficient) {
     section.append(el('p', result.insufficient + ' stock items need more usage history or a daily estimate.', 'muted'));
+  }
+  if (result.missingWorkerCount) {
+    section.append(el('p', result.missingWorkerCount + ' stock items need a worker count in Manage → Factories.', 'muted'));
   }
   draw('');
   page.append(section);
@@ -485,16 +490,29 @@ function renderCatalog(data) {
         form.append(wrapper);
       }
       field('name','Name','text',row.name);
+      if (kind === 'FACTORIES') {
+        field('workerCount','Number of workers','number',row.workerCount);
+        fields.workerCount.min = '0';
+        fields.workerCount.max = '1000000';
+        fields.workerCount.step = '1';
+        fields.workerCount.placeholder = 'e.g. 50';
+      }
       if (kind === 'ITEMS') {
         field('unit','Unit (e.g. roll, bottle)','text',row.unit);
         field('pack','Pack size','number',row.pack ?? 1);
         fields.pack.step = 'any';
         field('decimal','Allow decimals','checkbox',row.decimal);
+        field('usagePerWorker','Estimated units per worker per day','number',row.usagePerWorker);
+        fields.usagePerWorker.min = '0';
+        fields.usagePerWorker.max = '1000000';
+        fields.usagePerWorker.step = 'any';
+        fields.usagePerWorker.placeholder = 'e.g. 0.2';
+        form.append(el('p', 'Fill this in to use worker counts for this item. Leave it blank to use usage history or factory estimates.', 'muted'));
         field('photo', row.hasPhoto ? 'Replace photo' : 'Upload photo', 'file', '');
         fields.photo.accept = 'image/*';
         if (row.hasPhoto) form.append(product(row.name, 'Current photo', productIcon(row.name), {...row, factory:''}));
         form.append(el('h3', 'Assigned factories', 'section-title'),
-          el('p', 'Select factories. Daily usage is optional and helps estimate purchase quantities before there is enough history.', 'muted'));
+          el('p', 'Select factories. Units / day is the whole factory estimate when worker-based usage and history are unavailable.', 'muted'));
         const factories = data.FACTORIES.filter(entry => entry.active);
         if (!factories.length) form.append(el('p', 'Create an active factory under Factories first.', 'muted'));
         factories.forEach(entry => {
@@ -547,6 +565,8 @@ function renderCatalog(data) {
           if (key === 'photo') continue;
           if (key.startsWith('factory:')) {
             if (node.checked) input.factories.push(key.slice(8));
+          } else if (key === 'workerCount' || key === 'usagePerWorker') {
+            input[key] = node.value === '' ? '' : Number(node.value);
           } else input[key] = node.type === 'checkbox' ? node.checked : node.type === 'number' ? Number(node.value) : node.value;
         }
         if (kind === 'USERS' && input.active && !input.factories.length) {

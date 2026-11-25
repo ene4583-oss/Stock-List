@@ -20,3 +20,7 @@ In **Manage → Items**, select the factories that use the item, enter an option
 After updating an existing deployment, run `authorizeItemPhotos` once in the editor as the owner and approve Drive access before deploying the new version. Photos are resized in the browser and kept in a private Drive folder. The web app serves them only after checking account, item, and factory access.
 
 **Home → Suggested Buy** uses recent observed consumption when at least seven days are available, or the per-factory estimate when there is less history. A day without a record is excluded unless coverage has been confirmed. Initial lead time, review period and safety defaults are 3, 7 and 3 days. Recommendations subtract stock and eligible outstanding orders due within the planning horizon, then round up to the item's pack size. The list does not place orders. The current screen reads eligible orders already in PURCHASE_ORDERS.
+
+### Estimates based on worker count
+
+Set **Number of workers** under **Manage → Factories**. In **Manage → Items**, fill in **Estimated units per worker per day** for items that follow headcount. Suggested Buy uses this rate multiplied by each assigned factory's headcount immediately, including when there is no usage history. Clear the per-worker field to switch the item back to observed usage or its existing whole-factory daily estimate. A blank headcount prompts for missing data; an explicit zero is treated as zero workers.
