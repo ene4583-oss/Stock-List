@@ -728,16 +728,38 @@ function suggestedBuy() {
     const safety = within_(stock[6], 0, 365, within_(settings.get('DEFAULT_SAFETY_DAYS'), 0, 365, 3));
     const horizon = daysFrom_(today, Math.floor(lead + review));
     const incoming = (orders.get(identity) || []).reduce((sum, order) => sum + (order.due <= horizon ? order.open : 0), 0);
-    const gap = round_(daily * (lead + review + safety) - quantity - incoming);
-    if (gap <= 0) continue;
     const pack = within_(item[4], 0.000001, 1e9, 1);
+    const result = purchaseEstimate_(daily, quantity, incoming, pack, lead + review + safety);
+    if (result.suggested === 0) continue;
     recommendations.push({...itemView_(item), factory, factoryName:factories.get(factory),
-      quantity, suggested:round_(Math.ceil(gap / pack - 1e-9) * pack),
-      daysLeft:daily > 0 ? Math.round(quantity / daily * 10) / 10 : null,
-      basis});
+      quantity, suggested:result.suggested, daysLeft:result.daysLeft, basis});
   }
   recommendations.sort((a, b) => (a.daysLeft ?? Infinity) - (b.daysLeft ?? Infinity));
   return {recommendations, insufficient, missingWorkerCount};
+}
+
+function purchaseEstimate_(daily, stock, incoming, pack, days) {
+  const target = round_(daily * days);
+  const gap = Math.max(0, round_(target - stock - incoming));
+  return {
+    daily:round_(daily), target,
+    suggested:round_(Math.ceil(gap / pack - 1e-9) * pack),
+    daysLeft:daily > 0 ? Math.round(stock / daily * 10) / 10 : null
+  };
+}
+
+function previewBuy(input) {
+  const db = database_();
+  principal_(db, ['ADMIN']);
+  const {workers, perWorker, stock, incoming, pack} = input || {};
+  if (![workers, perWorker, stock, incoming, pack].every(value =>
+    typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1e6) ||
+    !Number.isInteger(workers) || pack < 0.000001) throw new Error('Check the sample numbers.');
+  const settings = new Map(rows_(db, 'SETTINGS').map(row => [row[0], row[1]]));
+  const lead = within_(settings.get('DEFAULT_LEAD_TIME'), 0, 365, 3);
+  const review = within_(settings.get('DEFAULT_REVIEW_PERIOD'), 0, 365, 7);
+  const safety = within_(settings.get('DEFAULT_SAFETY_DAYS'), 0, 365, 3);
+  return purchaseEstimate_(workers * perWorker, stock, incoming, pack, lead + review + safety);
 }
 
 const INTERFACE_DEFAULTS = Object.freeze({

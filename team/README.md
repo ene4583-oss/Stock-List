@@ -34,3 +34,9 @@ Use **Manage → Interface text** to change common menu labels, buttons, heading
 In **Manage → Items** or **Manage → Factories**, select an active entry and click **Delete item** or **Delete factory**. The entry disappears from active lists while its balances and history remain. The administrator can select the inactive entry and check **Active** to restore it.
 
 In **History → Team history**, expand **Stock change** and choose **Delete record**. An administrator-only correction reverses the stock movement once, marks the original as deleted and retains both records for audit. A receipt or opening balance cannot be reversed if doing so would make the current balance negative. Restore an inactive factory to see its history in the app.
+
+### Try a purchase estimate without history
+
+Open **Home → Suggested Buy → Try sample numbers** as the administrator. Use the prefilled worker count, consumption, stock and package size, or change the numbers to test a different case. The calculator uses the same rounding and planning defaults as Suggested Buy and never saves the sample.
+
+To generate live recommendations immediately, save a worker count in **Manage → Factories** and an estimated usage per worker in **Manage → Items**. A whole-factory **Units / day** estimate also works when historical usage is unavailable.
