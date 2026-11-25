@@ -184,7 +184,7 @@ function setupDatabase() {
 
 function username_(value) {
   const name = typeof value === 'string' ? value.trim().toLowerCase() : '';
-  return /^[a-z][a-z0-9._-]{2,39}$/.test(name) ? name : '';
+  return /^[a-z0-9][a-z0-9._-]{2,39}$/.test(name) ? name : '';
 }
 
 function mac_(value) {
@@ -310,9 +310,12 @@ function saveCatalog(kind, input) {
         input.active === true, old?.[10] || timestamp, timestamp];
     } else if (kind === 'USERS') {
       const username = username_(input.username);
-      if (!username || !['WORKER', 'SUPERVISOR'].includes(input.role) || old?.[4] === 'ADMIN' ||
-          entries.some(other => other[0] !== id && other[2] === username)) {
-        throw new Error('Check the username and role. The username may already be taken.');
+      if (!username) throw new Error('Use 3–40 characters for the username, starting with a letter or number. No spaces.');
+      if (!['WORKER', 'SUPERVISOR'].includes(input.role) || old?.[4] === 'ADMIN') {
+        throw new Error('Choose Worker or Supervisor.');
+      }
+      if (entries.some(other => other[0] !== id && username_(other[2]) === username)) {
+        throw new Error('Username already exists. Select that user to edit or reset their password.');
       }
       if (!old || input.resetPassword === true) issuedPassword = id_().replace(/-/g, '');
       const verifier = issuedPassword ? credential_(id, issuedPassword) : old[3];

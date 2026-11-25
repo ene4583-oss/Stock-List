@@ -64,7 +64,7 @@
   <p id="message" role="status" aria-live="polite">Loading…</p>
   <section id="page"></section>
   <section class="card" id="login" hidden>
-    <h2>Staff sign in</h2>
+    <h2>Sign in</h2>
     <form id="loginForm">
       <label>Username <input id="username" autocomplete="username" required maxlength="40"></label>
       <label>Password <input id="password" type="password" autocomplete="current-password" required maxlength="32"></label>
@@ -116,7 +116,10 @@ function failure(error) {
     'Check the quantity. Some items require whole numbers.', 'Item unavailable.',
     'System busy. Retry the same request.', 'This item already has stock history.',
     'Check the required fields.', 'Invalid pack size.', 'Check the email and role.',
-    'Select assigned factories.', 'Check the username and role. The username may already be taken.', 'Keep your administrator account active.',
+    'Select assigned factories.', 'Keep your administrator account active.',
+    'Use 3–40 characters for the username, starting with a letter or number. No spaces.',
+    'Choose Worker or Supervisor.',
+    'Username already exists. Select that user to edit or reset their password.',
     'An existing inventory balance uses decimals.', 'Stock limit reached.'
   ];
   message(publicErrors.includes(text) ? text : 'Could not complete the request. Retry from this page.', true);
@@ -404,9 +407,18 @@ function renderCatalog(data) {
       }
       if (kind === 'USERS') {
         field('username','Username','text',row.username);
+        fields.username.required = true;
+        fields.username.maxLength = 40;
+        fields.username.autocapitalize = 'none';
+        fields.username.spellcheck = false;
+        fields.username.placeholder = 'e.g. worker01';
+        form.append(el('p', 'Use 3–40 letters, numbers, periods, underscores or hyphens. Start with a letter or number.', 'muted'));
         if (row.id) field('resetPassword','Reset password','checkbox',false);
         field('role','Role','select',row.role || 'WORKER',[['WORKER','Worker'],['SUPERVISOR','Supervisor']]);
-        for (const f of data.FACTORIES.filter(f => f.active)) {
+        const activeFactories = data.FACTORIES.filter(f => f.active);
+        form.append(el('h3', 'Assigned factories', 'section-title'));
+        if (!activeFactories.length) form.append(el('p', 'Create an active factory under Factories first.', 'muted'));
+        for (const f of activeFactories) {
           field('factory:' + f.id, f.name, 'checkbox', row.factories?.includes(f.id));
         }
       }
@@ -430,9 +442,20 @@ function renderCatalog(data) {
             if (node.checked) input.factories.push(key.slice(8));
           } else input[key] = node.type === 'checkbox' ? node.checked : node.type === 'number' ? Number(node.value) : node.value;
         }
+        if (kind === 'USERS' && input.active && !input.factories.length) {
+          message('Select at least one factory for this user.', true);
+          save.disabled = false;
+          return;
+        }
+        const editorAccount = account;
         try {
           const result = await rpc('saveCatalog', kind, input);
-          if (kind === 'FACTORIES') populate(await rpc('start'));
+          if (account !== editorAccount) return;
+          if (kind === 'FACTORIES') {
+            const next = await rpc('start');
+            if (account !== editorAccount) return;
+            populate(next);
+          }
           await openPage('Manage');
           if (result.password) showPassword(result.password);
           message('Saved!');
@@ -474,6 +497,10 @@ function showPassword(password) {
 }
 function loggedOut(text = '') {
   token = '';
+  pending = null;
+  byId('password').value = '';
+  byId('summary').replaceChildren();
+  if (dialog.open) dialog.close();
   account = undefined;
   ++sequence;
   page.replaceChildren();
@@ -487,13 +514,22 @@ function loggedOut(text = '') {
 async function enter() {
   populate(await rpc('start'));
   byId('login').hidden = true;
-  byId('signOut').hidden = !token;
+  byId('signOut').hidden = false;
   return openPage(account.role === 'WORKER' ? 'Use Item' : 'Home');
 }
-byId('ownerLogin').onclick = () => enter().catch(() => loggedOut('Open the app with the Google account used to deploy it.'));
+byId('ownerLogin').onclick = async () => {
+  byId('ownerLogin').disabled = byId('signIn').disabled = true;
+  try {
+    await enter();
+  } catch (error) {
+    loggedOut('Open the app with the Google account used to deploy it.');
+  } finally {
+    byId('ownerLogin').disabled = byId('signIn').disabled = false;
+  }
+};
 byId('loginForm').onsubmit = async event => {
   event.preventDefault();
-  byId('signIn').disabled = true;
+  byId('ownerLogin').disabled = byId('signIn').disabled = true;
   try {
     token = await rpc('signIn', byId('username').value, byId('password').value);
     await enter();
@@ -501,15 +537,16 @@ byId('loginForm').onsubmit = async event => {
     loggedOut('Sign-in failed. Check your username and password and try again.');
   } finally {
     byId('password').value = '';
-    byId('signIn').disabled = false;
+    byId('ownerLogin').disabled = byId('signIn').disabled = false;
   }
 };
 byId('signOut').onclick = async () => {
+  if (submitting) return;
   const currentToken = token;
   loggedOut();
-  await rpc('signOut', currentToken).catch(() => {});
+  if (currentToken) await rpc('signOut', currentToken).catch(() => {});
 };
-enter().catch(() => loggedOut());
+loggedOut();
 </script>
 </body>
 </html>
