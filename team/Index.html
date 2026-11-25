@@ -1,0 +1,376 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <style>
+    :root{font:16px system-ui,sans-serif;color:#1e293b;background:#f8fafc}
+    *{box-sizing:border-box} body{margin:0} header{background:white;border-bottom:1px solid #dbe3ee}
+    header div,main{max-width:56rem;margin:auto;padding:1rem} header div{display:flex;justify-content:space-between;align-items:center;gap:1rem}
+    main{padding-bottom:5rem} h1,h2,p{margin:0 0 .8rem} h2{font-size:1.35rem} nav,.actions{display:flex;flex-wrap:wrap;gap:.5rem;margin:.8rem 0}
+    button,input,select{font:inherit;min-height:44px;border:1px solid #94a3b8;border-radius:.65rem;padding:.55rem .75rem;color:inherit;background:white}
+    input[type=checkbox]{width:22px;min-height:0;height:22px;accent-color:#2563eb} button{cursor:pointer;min-width:44px} button[aria-current=true],.primary{background:#2563eb;color:white;border-color:#2563eb}
+    button:disabled{opacity:.55} label{display:flex;gap:.45rem;align-items:center;flex-wrap:wrap;margin:.55rem 0}
+    label input:not([type=checkbox]),label select{width:100%}
+    .card,.item{background:white;border:1px solid #dbe3ee;border-radius:.9rem;padding:.9rem;margin:.5rem 0}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,15rem),1fr));gap:.55rem}
+    .item{display:flex;align-items:center;justify-content:space-between;gap:.6rem;overflow-wrap:anywhere}
+    small{display:block;color:#475569} .stepper{display:flex;align-items:center;gap:.25rem}
+    .stepper input{width:4.6rem;text-align:center;padding:.3rem} #search{width:100%;margin-bottom:.5rem}
+    #message{min-height:1.5rem;color:#166534} #message.error{color:#b91c1c}
+    dialog{width:min(32rem,calc(100% - 2rem));border:1px solid #94a3b8;border-radius:1rem;padding:1rem;color:inherit} dialog::backdrop{background:#1e293b88}
+    @media(max-width:420px){header div{align-items:flex-start;flex-direction:column}.item{align-items:flex-start;flex-direction:column}nav button{flex:1}}
+  </style>
+</head>
+<body>
+<header><div><strong>Smart Stock</strong><span id="account"></span></div></header>
+<main>
+  <label id="factoryField" style="display:none" hidden>Factory <select id="factory"></select></label>
+  <nav id="navigation" aria-label="Main"></nav>
+  <p id="message" role="status" aria-live="polite">Loading…</p>
+  <section id="page"></section>
+  <section class="card" id="login" hidden>
+    <h2>员工 / 主管登录</h2>
+    <form id="loginForm">
+      <label>用户名 <input id="username" autocomplete="username" required maxlength="40"></label>
+      <label>密码 <input id="password" type="password" autocomplete="current-password" required maxlength="32"></label>
+      <button id="signIn" class="primary">登录</button>
+    </form>
+    <p><button id="ownerLogin" type="button">管理员用 Google 账号进入</button></p>
+  </section>
+  <button id="signOut" type="button" hidden>退出登录</button>
+</main>
+<dialog id="confirmation">
+  <h2>Confirm quantities</h2>
+  <ul id="summary"></ul>
+  <div class="actions"><button id="confirm" class="primary">Confirm</button><button id="cancel">Cancel</button></div>
+</dialog>
+<script>
+const byId = id => document.getElementById(id);
+const page = byId('page');
+const factory = byId('factory');
+const dialog = byId('confirmation');
+let token = '';
+let account, current = 'Home', sequence = 0, pending = null, submitting = false;
+const rpc = (name, ...args) => new Promise((resolve, reject) => {
+  const run = google.script.run.withSuccessHandler(resolve).withFailureHandler(reject);
+  if (['start', 'factoryItems', 'stockOverview', 'history', 'postStock'].includes(name)) {
+    run[name](...args, token);
+  } else {
+    run[name](...args);
+  }
+});
+function el(tag, text = '', className = '') {
+  const node = document.createElement(tag);
+  node.textContent = text;
+  node.className = className;
+  return node;
+}
+function button(text, action, style = '') {
+  const node = el('button', text, style);
+  node.type = 'button';
+  node.onclick = action;
+  return node;
+}
+function message(text, error = false) {
+  byId('message').textContent = text;
+  byId('message').className = error ? 'error' : '';
+}
+function failure(error) {
+  const text = (error?.message || '').replace(/^Exception: |^Error: /, '');
+  const publicErrors = [
+    'Access denied.', 'Invalid request.', 'Please contact your supervisor.',
+    'Check the quantity. Some items require whole numbers.', 'Item unavailable.',
+    'System busy. Retry the same request.', 'This item already has stock history.',
+    'Check the required fields.', 'Invalid pack size.', 'Check the email and role.',
+    'Select assigned factories.', '用户名或身份无效，或用户名已被使用。', 'Keep your administrator account active.',
+    'An existing inventory balance uses decimals.', 'Stock limit reached.'
+  ];
+  message(publicErrors.includes(text) ? text : 'Could not complete the request. Retry from this page.', true);
+}
+function routes() {
+  const base = ['Home', 'Use Item', 'My History'];
+  if (account.role !== 'WORKER') base.push('Stock', 'Stock In', 'Team History');
+  if (account.role === 'ADMIN') base.push('Opening Stock', 'Manage');
+  return base;
+}
+async function openPage(name) {
+  if (submitting) return;
+  current = name;
+  const version = ++sequence;
+  byId('navigation').replaceChildren(...routes().map(route => {
+    const control = button(route, () => openPage(route));
+    control.setAttribute('aria-current', String(route === name));
+    return control;
+  }));
+  page.replaceChildren(el('h2', name));
+  message('');
+  try {
+    if (name === 'Home') {
+      const shortcuts = el('div', '', 'grid');
+      routes().slice(1).forEach(route => shortcuts.append(button(route, () => openPage(route), 'card')));
+      page.append(shortcuts);
+      return;
+    }
+    if (name !== 'Manage' && !factory.value) {
+      message('No factory assigned. Please contact your supervisor.', true);
+      return;
+    }
+    message('Loading…');
+    if (name === 'Manage') {
+      const data = await rpc('catalog');
+      if (version === sequence) renderCatalog(data);
+    } else if (name === 'Stock') {
+      const items = await rpc('stockOverview', factory.value);
+      if (version === sequence) renderList(items.map(item => [item.name, item.quantity + ' ' + item.unit]));
+    } else if (name.endsWith('History')) {
+      const rows = await rpc('history', factory.value, name === 'Team History');
+      if (version === sequence) renderList(rows.map(row => [row.name,
+        [row.date, row.quantity + ' ' + row.unit, row.type, row.status,
+          row.before === undefined ? '' : row.before + ' → ' + row.after].filter(Boolean).join(' · ')]));
+    } else {
+      const items = await rpc('factoryItems', factory.value);
+      if (version === sequence) renderEntry(items, {'Use Item':'USE','Stock In':'RECEIVE','Opening Stock':'OPENING'}[name]);
+    }
+    if (version === sequence) message('');
+  } catch (error) {
+    if (version === sequence) failure(error);
+  }
+}
+function renderList(records) {
+  if (!records.length) page.append(el('p', 'No records yet.'));
+  records.forEach(([title, detail]) => {
+    const row = el('div', '', 'item');
+    row.append(el('strong', title), el('small', detail));
+    page.append(row);
+  });
+}
+function renderEntry(items, type) {
+  if (!items.length) {
+    page.append(el('p', 'No items available.'));
+    return;
+  }
+  const values = new Map();
+  const search = el('input');
+  search.id = 'search';
+  search.type = 'search';
+  search.placeholder = 'Search items';
+  search.setAttribute('aria-label', 'Search items');
+  const list = el('div');
+  const save = button('Save', () => {
+    const lines = items.map(item => ({item:item.id, quantity:Number(values.get(item.id) || 0)}))
+      .filter(line => line.quantity !== 0);
+    if (!lines.length || lines.some(line => !Number.isFinite(line.quantity) || line.quantity < 0)) {
+      message('Enter a positive quantity.', true);
+      return;
+    }
+    const payload = {type, factory:factory.value, lines};
+    const signature = JSON.stringify(payload);
+    if (pending?.signature !== signature) {
+      pending = {signature, payload:{...payload, request:crypto.randomUUID()}};
+    }
+    byId('summary').replaceChildren(...lines.map(line => {
+      const item = items.find(row => row.id === line.item);
+      return el('li', item.name + ' · ' + line.quantity + ' ' + item.unit);
+    }));
+    dialog.showModal();
+    byId('confirm').onclick = async () => {
+      if (submitting) return;
+      submitting = true;
+      byId('confirm').disabled = true;
+      byId('cancel').disabled = true;
+      message('Saving…');
+      try {
+        await rpc('postStock', pending.payload);
+        pending = null;
+        values.clear();
+        paint();
+        message('Saved!');
+      } catch (error) {
+        failure(error);
+      } finally {
+        submitting = false;
+        byId('confirm').disabled = false;
+        byId('cancel').disabled = false;
+        dialog.close();
+      }
+    };
+  }, 'primary');
+  function paint() {
+    const query = search.value.trim().toLowerCase();
+    list.replaceChildren(...items.filter(item => item.name.toLowerCase().includes(query)).map(item => {
+      const row = el('div', '', 'item');
+      const label = el('div');
+      label.append(el('strong', item.name), el('small', item.unit));
+      const input = el('input');
+      input.type = 'number';
+      input.inputMode = 'decimal';
+      input.min = '0';
+      input.step = 'any';
+      input.value = values.get(item.id) ?? '0';
+      input.setAttribute('aria-label', item.name + ' quantity');
+      input.oninput = () => values.set(item.id, input.value || '0');
+      function step(delta) {
+        input.value = String(Math.max(0, Math.round(((Number(input.value) || 0) + delta) * 1e6) / 1e6));
+        input.oninput();
+      }
+      const minus = button('−', () => step(-1));
+      const plus = button('+', () => step(1));
+      minus.setAttribute('aria-label', 'Decrease ' + item.name);
+      plus.setAttribute('aria-label', 'Increase ' + item.name);
+      const controls = el('div', '', 'stepper');
+      controls.append(minus, input, plus);
+      row.append(label, controls);
+      return row;
+    }));
+  }
+  search.oninput = paint;
+  paint();
+  page.append(search, list, save);
+}
+function renderCatalog(data) {
+  const kinds = {FACTORIES:'Factories', ITEMS:'Items', USERS:'Users', STOCK:'Item assignments'};
+  for (const [kind, title] of Object.entries(kinds)) {
+    const card = el('section', '', 'card');
+    const editor = el('div');
+    const picker = el('select');
+    picker.setAttribute('aria-label', title);
+    picker.append(new Option('New', ''));
+    for (const [index, row] of data[kind].entries()) {
+      const description = row.name || [data.FACTORIES.find(f => f.id === row.factory)?.name,
+        data.ITEMS.find(i => i.id === row.item)?.name].join(' / ');
+      picker.append(new Option(description, String(index)));
+    }
+    function edit() {
+      const row = picker.value === '' ? {} : data[kind][Number(picker.value)];
+      const fields = {};
+      const form = el('form');
+      function field(key, label, type, initial, options = []) {
+        const input = el(type === 'select' ? 'select' : 'input');
+        if (type === 'select') options.forEach(([id, name]) => input.append(new Option(name, id)));
+        else input.type = type;
+        if (type === 'checkbox') input.checked = initial === true;
+        else input.value = initial ?? '';
+        fields[key] = input;
+        const wrapper = el('label', label);
+        wrapper.append(input);
+        form.append(wrapper);
+      }
+      if (kind !== 'STOCK') field('name','Name','text',row.name);
+      if (kind === 'ITEMS') {
+        field('unit','Unit','text',row.unit);
+        field('pack','Pack size','number',row.pack ?? 1);
+        fields.pack.step = 'any';
+        field('decimal','Allow decimals','checkbox',row.decimal);
+      }
+      if (kind === 'USERS') {
+        field('username','用户名','text',row.username);
+        if (row.id) field('resetPassword','生成新密码','checkbox',false);
+        field('role','Role','select',row.role || 'WORKER',[['WORKER','员工'],['SUPERVISOR','主管']]);
+        for (const f of data.FACTORIES.filter(f => f.active)) {
+          field('factory:' + f.id, f.name, 'checkbox', row.factories?.includes(f.id));
+        }
+      }
+      if (kind === 'STOCK') {
+        field('factory','Factory','select',row.factory || data.FACTORIES.find(f => f.active)?.id,
+          data.FACTORIES.filter(f => f.active || f.id === row.factory).map(f => [f.id,f.name]));
+        field('item','Item','select',row.item || data.ITEMS.find(i => i.active)?.id,
+          data.ITEMS.filter(i => i.active || i.id === row.item).map(i => [i.id,i.name]));
+        fields.factory.disabled = Boolean(row.factory);
+        fields.item.disabled = Boolean(row.item);
+      }
+      field('active','Active','checkbox',row.active ?? true);
+      const save = el('button','Save','primary');
+      form.append(save);
+      form.onsubmit = async event => {
+        event.preventDefault();
+        save.disabled = true;
+        const input = {id:row.id || '', factories:[]};
+        for (const [key, node] of Object.entries(fields)) {
+          if (key.startsWith('factory:')) {
+            if (node.checked) input.factories.push(key.slice(8));
+          } else input[key] = node.type === 'checkbox' ? node.checked : node.type === 'number' ? Number(node.value) : node.value;
+        }
+        try {
+          const result = await rpc('saveCatalog', kind, input);
+          if (kind === 'FACTORIES') populate(await rpc('start'));
+          await openPage('Manage');
+          if (result.password) showPassword(result.password);
+          message('Saved!');
+        } catch (error) {
+          failure(error);
+        } finally {
+          save.disabled = false;
+        }
+      };
+      editor.replaceChildren(form);
+    }
+    picker.onchange = edit;
+    edit();
+    card.append(el('h2', title), picker, editor);
+    page.append(card);
+  }
+}
+function populate(value) {
+  const selection = factory.value;
+  account = value;
+  byId('account').textContent = account.name;
+  factory.replaceChildren(...account.factories.map(row => new Option(row.name,row.id)));
+  if (account.factories.some(row => row.id === selection)) factory.value = selection;
+  byId('factoryField').style.display = account.factories.length ? '' : 'none';
+  byId('factoryField').hidden = !account.factories.length;
+}
+byId('cancel').onclick = () => dialog.close();
+dialog.oncancel = event => { if (submitting) event.preventDefault(); };
+factory.onchange = () => openPage(current);
+function showPassword(password) {
+  const card = el('section', '', 'card');
+  const value = el('input');
+  value.value = password;
+  value.readOnly = true;
+  value.setAttribute('aria-label', '新密码');
+  card.append(el('p', '请复制新密码，私下发给员工。离开此页后不会再显示。'), value);
+  page.prepend(card);
+  value.select();
+}
+function loggedOut(text = '') {
+  token = '';
+  account = undefined;
+  ++sequence;
+  page.replaceChildren();
+  byId('navigation').replaceChildren();
+  byId('factoryField').style.display = 'none';
+  byId('account').textContent = '';
+  byId('signOut').hidden = true;
+  byId('login').hidden = false;
+  message(text, Boolean(text));
+}
+async function enter() {
+  populate(await rpc('start'));
+  byId('login').hidden = true;
+  byId('signOut').hidden = !token;
+  return openPage('Home');
+}
+byId('ownerLogin').onclick = () => enter().catch(() => loggedOut('请用部署者的 Google 账号打开网页。'));
+byId('loginForm').onsubmit = async event => {
+  event.preventDefault();
+  byId('signIn').disabled = true;
+  try {
+    token = await rpc('signIn', byId('username').value, byId('password').value);
+    await enter();
+  } catch (error) {
+    loggedOut('登录失败，请检查用户名和密码，稍后再试。');
+  } finally {
+    byId('password').value = '';
+    byId('signIn').disabled = false;
+  }
+};
+byId('signOut').onclick = async () => {
+  const currentToken = token;
+  loggedOut();
+  await rpc('signOut', currentToken).catch(() => {});
+};
+enter().catch(() => loggedOut());
+</script>
+</body>
+</html>
