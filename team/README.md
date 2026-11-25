@@ -24,3 +24,7 @@ After updating an existing deployment, run `authorizeItemPhotos` once in the edi
 ### Estimates based on worker count
 
 Set **Number of workers** under **Manage → Factories**. In **Manage → Items**, fill in **Estimated units per worker per day** for items that follow headcount. Suggested Buy uses this rate multiplied by each assigned factory's headcount immediately, including when there is no usage history. Clear the per-worker field to switch the item back to observed usage or its existing whole-factory daily estimate. A blank headcount prompts for missing data; an explicit zero is treated as zero workers.
+
+### Interface text
+
+Use **Manage → Interface text** to change common menu labels, buttons, headings and messages. Leave a field blank to restore the default. The new text is visible to other users when they reopen or reload the app. Apps Script setup does not need to run again.

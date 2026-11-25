@@ -731,3 +731,52 @@ function suggestedBuy() {
   recommendations.sort((a, b) => (a.daysLeft ?? Infinity) - (b.daysLeft ?? Infinity));
   return {recommendations, insufficient, missingWorkerCount};
 }
+
+const INTERFACE_DEFAULTS = Object.freeze({
+  appName:'Smart Stock', factory:'Factory', signIn:'Sign in', adminSignIn:'Admin sign in', signOut:'Sign out',
+  username:'Username', password:'Password', useNow:'Use now', history:'History', home:'Home',
+  stock:'Stock', manage:'Manage', dashboard:'Stock overview', buy:'Suggested Buy',
+  myHistory:'My history', teamHistory:'Team history', receive:'Receive', opening:'Opening stock',
+  search:'Search items', save:'Save', confirm:'Confirm', cancel:'Cancel', saved:'Saved!',
+  used:'Used', received:'Received', onHand:'On hand', noItems:'No items yet.', noHistory:'No records yet.'
+});
+
+function interfaceOverrides_(rows) {
+  return Object.fromEntries(rows.filter(row => row[1] === 'EN' &&
+    Object.hasOwn(INTERFACE_DEFAULTS, row[0]) && typeof row[2] === 'string' && row[2].trim())
+    .map(row => [row[0], row[2].trim()]));
+}
+
+// Public login copy only. Never return other values from the database.
+function interfaceText() {
+  return {defaults:INTERFACE_DEFAULTS, overrides:interfaceOverrides_(rows_(database_(), 'LABELS'))};
+}
+
+function saveInterfaceText(changes) {
+  return locked_(() => {
+    const db = database_();
+    principal_(db, ['ADMIN']);
+    if (!changes || typeof changes !== 'object' || Array.isArray(changes)) throw new Error('Check the interface text.');
+    const entries = Object.entries(changes);
+    if (entries.some(([key, value]) => !Object.hasOwn(INTERFACE_DEFAULTS, key) ||
+        typeof value !== 'string' || value.length > 80)) throw new Error('Check the interface text.');
+    const rows = rows_(db, 'LABELS');
+    const overrides = interfaceOverrides_(rows);
+    const inserts = [];
+    const requests = [];
+    const timestamp = now_();
+    for (const [key, raw] of entries) {
+      const value = raw.trim();
+      const index = rows.findIndex(row => row[0] === key && row[1] === 'EN');
+      if ((overrides[key] || '') === value) continue;
+      const row = [key, 'EN', value, timestamp];
+      if (index < 0) inserts.push(row);
+      else requests.push(update_(db, 'LABELS', index + 2, row));
+      if (value) overrides[key] = value;
+      else delete overrides[key];
+    }
+    if (inserts.length) requests.push(append_(db, 'LABELS', inserts));
+    if (requests.length) commit_(db, requests);
+    return {defaults:INTERFACE_DEFAULTS, overrides};
+  });
+}

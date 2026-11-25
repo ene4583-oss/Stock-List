@@ -15,6 +15,10 @@
     .mark{width:38px;height:38px;background:var(--blue);color:#fff}
     .thumb{width:52px;height:52px;overflow:hidden}
     .thumb img{width:100%;height:100%;object-fit:cover}
+    .stock-number{flex:none;text-align:right}.stock-number strong{font-size:1.35rem;display:block}
+    .movement{display:block;font-weight:650}.record-info{color:var(--muted)}
+    .record-info summary{padding:.35rem 0;min-height:44px;font-size:.8rem}
+    .label-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(13rem,1fr));gap:0 .9rem}
     .buy-qty{flex:none;text-align:right;color:var(--blue)}
     .assignment{display:grid;grid-template-columns:1fr minmax(7rem,40%);gap:.6rem;align-items:center;padding:.2rem 0}
     .assignment input[type=number]{width:100%}.thumb svg{width:24px;height:24px}
@@ -22,7 +26,7 @@
     main{padding:1rem 0 6rem} h1,h2,p{margin:0 0 .75rem} h2{font-size:1.45rem;letter-spacing:-.035em}
     #account,small,.muted{color:var(--muted);font-size:.875rem}
     nav{display:flex;gap:.25rem;margin:0 0 1rem;padding:.35rem;background:#fff;border:1px solid var(--line);border-radius:15px}
-    nav:empty{display:none} nav button{flex:1;border:0;display:flex;justify-content:center;align-items:center;gap:.4rem;color:var(--muted);white-space:nowrap}
+    nav:empty{display:none} nav button{flex:1;border:0;display:flex;justify-content:center;align-items:center;gap:.4rem;color:var(--muted);min-width:0;overflow-wrap:anywhere}
     nav button[aria-current=page]{color:var(--blue);background:#edf2ff;font-weight:700}
     button,input,select{font:inherit;min-height:44px;border:1px solid #c6d1df;border-radius:10px;padding:.55rem .75rem;color:inherit;background:#fff}
     button{min-width:44px;cursor:pointer} button:disabled{opacity:.55;cursor:default}
@@ -59,28 +63,28 @@
 </head>
 <body>
 <header><div class="bar">
-  <div class="brand"><span id="brandIcon" class="mark"></span>Smart Stock</div>
-  <div class="with-icon"><span id="account"></span><button id="signOut" type="button" hidden>Sign out</button></div>
+  <div class="brand"><span id="brandIcon" class="mark"></span><span data-text="appName">Smart Stock</span></div>
+  <div class="with-icon"><span id="account"></span><button id="signOut" data-text="signOut" type="button" hidden>Sign out</button></div>
 </div></header>
 <main>
-  <label id="factoryField" style="display:none" hidden>Factory <select id="factory"></select></label>
+  <label id="factoryField" style="display:none" hidden><span data-text="factory">Factory</span> <select id="factory"></select></label>
   <nav id="navigation" aria-label="Main"></nav>
   <p id="message" role="status" aria-live="polite">Loading…</p>
   <section id="page"></section>
   <section class="card" id="login" hidden>
-    <h2>Sign in</h2>
+    <h2 data-text="signIn">Sign in</h2>
     <form id="loginForm">
-      <label>Username <input id="username" autocomplete="username" required></label>
-      <label>Password <input id="password" type="password" autocomplete="current-password" required></label>
-      <button id="signIn" class="primary">Sign in</button>
+      <label><span data-text="username">Username</span> <input id="username" autocomplete="username" required></label>
+      <label><span data-text="password">Password</span> <input id="password" type="password" autocomplete="current-password" required></label>
+      <button id="signIn" data-text="signIn" class="primary">Sign in</button>
     </form>
-    <p><button id="ownerLogin" type="button">Sign in as administrator</button></p>
+    <p><button id="ownerLogin" data-text="adminSignIn" type="button">Admin sign in</button></p>
   </section>
 </main>
 <dialog id="confirmation">
-  <h2>Confirm quantities</h2>
+  <h2 data-text="confirm">Confirm</h2>
   <ul id="summary"></ul>
-  <div class="actions"><button id="confirm" class="primary">Confirm</button><button id="cancel">Cancel</button></div>
+  <div class="actions"><button id="confirm" data-text="confirm" class="primary">Confirm</button><button id="cancel" data-text="cancel">Cancel</button></div>
 </dialog>
 <script>
 const byId = id => document.getElementById(id);
@@ -97,6 +101,16 @@ const rpc = (name, ...args) => new Promise((resolve, reject) => {
     run[name](...args);
   }
 });
+let wording = {defaults:{}, overrides:{}};
+const label = (key, fallback) => wording.overrides[key] ?? wording.defaults[key] ?? fallback;
+function applyWording(update) {
+  wording = update;
+  document.title = label('appName', 'Smart Stock');
+  for (const node of document.querySelectorAll('[data-text]')) {
+    node.textContent = label(node.dataset.text, node.textContent);
+  }
+}
+const wordingReady = rpc('interfaceText').then(applyWording).catch(() => {});
 function el(tag, text = '', className = '') {
   const node = document.createElement(tag);
   node.textContent = text;
@@ -129,7 +143,7 @@ function failure(error) {
     'Check the factory assignments.', 'Check the factory assignments and daily usage estimates.',
     'Enter a whole number of workers, or leave it blank.',
     'Enter a valid daily usage per worker, or leave it blank.',
-    'Choose a valid item photo.', 'Could not open that photo. Try a JPG or PNG.'
+    'Check the interface text.', 'Choose a valid item photo.', 'Could not open that photo. Try a JPG or PNG.'
   ];
   message(publicErrors.includes(text) ? text : 'Could not complete the request. Retry from this page.', true);
 }
@@ -168,15 +182,18 @@ function iconButton(label, symbol, action, style = '') {
   return control;
 }
 function routes() {
-  if (account.role === 'WORKER') return [['Use Now','use','Use Item'], ['History','history','My History']];
-  const links = [['Home','home','Home'], ['Stock','box','Stock'], ['History','history','Team History']];
-  if (account.role === 'ADMIN') links.push(['Manage','more','Manage']);
+  if (account.role === 'WORKER') {
+    return [[label('useNow', 'Use now'),'use','Use Item'], [label('history', 'History'),'history','My History']];
+  }
+  const links = [[label('home','Home'),'home','Home'], [label('stock','Stock'),'box','Stock'],
+    [label('history','History'),'history','Team History']];
+  if (account.role === 'ADMIN') links.push([label('manage','Manage'),'more','Manage']);
   return links;
 }
 function activeRoute(name) {
-  if (name.endsWith('History')) return 'History';
+  if (name.endsWith('History')) return account.role === 'WORKER' ? 'My History' : 'Team History';
   if (account.role !== 'WORKER' && ['Stock','Stock In','Opening Stock','Use Item'].includes(name)) return 'Stock';
-  return name === 'Use Item' ? 'Use Now' : name;
+  return name;
 }
 function productIcon(name) {
   if (/toilet|tissue|roll/i.test(name)) return 'roll';
@@ -209,13 +226,14 @@ function product(name, detail, symbol = productIcon(name), photo = null) {
     thumb.dataset.factory = photo.factory ?? factory.value;
     photoObserver.observe(thumb);
   }
-  text.append(el('strong', name), el('small', detail));
+  text.append(el('strong', name));
+  if (detail) text.append(el('small', detail));
   row.append(thumb, text);
   return row;
 }
 function renderBuy(result) {
   const section = el('section');
-  section.append(el('h3', 'Suggested Buy', 'section-title'));
+  section.append(el('h3', label('buy', 'Suggested Buy'), 'section-title'));
   function draw(factoryId) {
     const list = el('div', '', 'list');
     const matches = result.recommendations.filter(row => !factoryId || row.factory === factoryId);
@@ -267,7 +285,7 @@ function renderSummary(summary) {
     for (const entry of summary) {
       const row = el('div', '', 'item');
       row.append(product(entry.name, entry.items + ' stock items · ' + entry.empty + ' out of stock', 'factory'),
-        button('Stock', () => { factory.value = entry.id; openPage('Stock'); }));
+        button(label('stock', 'Stock'), () => { factory.value = entry.id; openPage('Stock'); }));
       list.append(row);
     }
     page.append(list);
@@ -277,13 +295,17 @@ async function openPage(name) {
   if (submitting) return;
   current = name;
   const version = ++sequence;
-  byId('navigation').replaceChildren(...routes().map(([label, symbol, route]) => {
-    const control = iconButton(label, symbol, () => openPage(route));
-    if (label === activeRoute(name)) control.setAttribute('aria-current', 'page');
+  byId('navigation').replaceChildren(...routes().map(([caption, symbol, route]) => {
+    const control = iconButton(caption, symbol, () => openPage(route));
+    if (route === activeRoute(name)) control.setAttribute('aria-current', 'page');
     return control;
   }));
-  const title = {Home:'Stock dashboard', 'Use Item':'Use now', 'Stock In':'Receive stock',
-    'Opening Stock':'Opening stock', 'My History':'My history', 'Team History':'Team history'}[name] || name;
+  const title = {
+    Home:label('dashboard','Stock overview'), 'Use Item':label('useNow','Use now'),
+    Stock:label('stock','Stock'), Manage:label('manage','Manage'),
+    'Stock In':label('receive','Receive'), 'Opening Stock':label('opening','Opening stock'),
+    'My History':label('myHistory','My history'), 'Team History':label('teamHistory','Team history')
+  }[name];
   page.replaceChildren(el('h2', title));
   byId('factoryField').hidden = !account.factories.length || ['Home', 'Manage'].includes(name);
   message('');
@@ -314,23 +336,21 @@ async function openPage(name) {
       const items = await rpc('stockOverview', factory.value);
       if (version === sequence) {
         const actions = el('div', '', 'actions');
-        actions.append(iconButton('Use now','use',() => openPage('Use Item')),
-          iconButton('Receive','box',() => openPage('Stock In')));
-        if (account.role === 'ADMIN') actions.append(button('Opening stock', () => openPage('Opening Stock')));
+        actions.append(iconButton(label('useNow','Use now'),'use',() => openPage('Use Item')),
+          iconButton(label('receive','Receive'),'box',() => openPage('Stock In')));
+        if (account.role === 'ADMIN') actions.append(button(label('opening','Opening stock'), () => openPage('Opening Stock')));
         page.append(actions);
-        renderList(items.map(item => [item.name, quantityLabel('In stock', item.quantity, item.unit), item]));
+        renderStock(items);
       }
     } else if (name.endsWith('History')) {
       if (account.role !== 'WORKER') {
         const actions = el('div', '', 'actions');
-        actions.append(button(name === 'Team History' ? 'My history' : 'Team history',
+        actions.append(button(name === 'Team History' ? label('myHistory','My history') : label('teamHistory','Team history'),
           () => openPage(name === 'Team History' ? 'My History' : 'Team History')));
         page.append(actions);
       }
       const rows = await rpc('history', factory.value, name === 'Team History');
-      if (version === sequence) renderList(rows.map(row => [row.name,
-        [row.date, quantityLabel('Quantity', row.quantity, row.unit), row.type, row.status,
-          row.before === undefined ? '' : row.before + ' → ' + row.after].filter(Boolean).join(' · ')]));
+      if (version === sequence) renderHistory(rows);
     } else {
       const items = await rpc('factoryItems', factory.value);
       if (version === sequence) renderEntry(items, {'Use Item':'USE','Stock In':'RECEIVE','Opening Stock':'OPENING'}[name]);
@@ -340,35 +360,71 @@ async function openPage(name) {
     if (version === sequence) failure(error);
   }
 }
-function quantityLabel(label, quantity, unit) {
-  return label + ': ' + quantity + (unit ? ' · Unit: ' + unit : '');
+function readableUnit(value) {
+  const unit = String(value ?? '').trim();
+  return /\p{L}/u.test(unit) ? unit : '';
 }
-function renderList(records) {
-  if (!records.length) {
-    page.append(el('p', 'No records yet.', 'muted'));
+function displayQuantity(quantity, unit) {
+  return [String(quantity), readableUnit(unit)].filter(Boolean).join(' ');
+}
+function renderStock(items) {
+  if (!items.length) {
+    page.append(el('p', label('noItems','No items yet.'), 'muted'));
     return;
   }
   const list = el('div', '', 'list');
-  records.forEach(([title, detail, photo]) => {
+  for (const item of items) {
     const row = el('div', '', 'item');
-    row.append(product(title, detail, productIcon(title), photo));
+    const quantity = el('div', '', 'stock-number');
+    quantity.append(el('strong', displayQuantity(item.quantity, item.unit)),
+      el('small', label('onHand','On hand')));
+    row.append(product(item.name, '', productIcon(item.name), item), quantity);
     list.append(row);
-  });
+  }
+  page.append(list);
+}
+function displayDate(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  const date = new Date(value + 'T00:00:00Z');
+  return Number.isNaN(date.getTime()) ? value :
+    new Intl.DateTimeFormat('en-GB', {day:'numeric', month:'short', year:'numeric', timeZone:'UTC'}).format(date);
+}
+function renderHistory(records) {
+  if (!records.length) {
+    page.append(el('p', label('noHistory','No records yet.'), 'muted'));
+    return;
+  }
+  const list = el('div', '', 'list');
+  const actions = {USE:label('used','Used'), RECEIVE:label('received','Received'), OPENING:label('opening','Opening stock')};
+  for (const record of records) {
+    const row = el('div', '', 'item');
+    row.append(product(record.name, displayDate(record.date)));
+    const info = el('div', '', 'stock-number');
+    const action = actions[record.type] || label('used','Used');
+    info.append(el('span', action + ' ' + displayQuantity(record.quantity, record.unit), 'movement'));
+    if (record.before !== undefined) {
+      const details = el('details', '', 'record-info');
+      details.append(el('summary','Stock change'), el('small', String(record.before) + ' → ' + String(record.after)));
+      info.append(details);
+    }
+    row.append(info);
+    list.append(row);
+  }
   page.append(list);
 }
 function renderEntry(items, type) {
   if (!items.length) {
-    page.append(el('p', 'No items available.'));
+    page.append(el('p', label('noItems','No items yet.')));
     return;
   }
   const values = new Map();
   const search = el('input');
   search.id = 'search';
   search.type = 'search';
-  search.placeholder = 'Search items';
-  search.setAttribute('aria-label', 'Search items');
+  search.placeholder = label('search','Search items');
+  search.setAttribute('aria-label', search.placeholder);
   const list = el('div', '', 'list');
-  const save = iconButton('Save', 'check', () => {
+  const save = iconButton(label('save','Save'), 'check', () => {
     const lines = items.map(item => ({item:item.id, quantity:Number(values.get(item.id) || 0)}))
       .filter(line => line.quantity !== 0);
     if (!lines.length || lines.some(line => !Number.isFinite(line.quantity) || line.quantity < 0)) {
@@ -382,7 +438,7 @@ function renderEntry(items, type) {
     }
     byId('summary').replaceChildren(...lines.map(line => {
       const item = items.find(row => row.id === line.item);
-      return el('li', item.name + ' · ' + quantityLabel('Quantity', line.quantity, item.unit));
+      return el('li', item.name + ' · ' + displayQuantity(line.quantity, item.unit));
     }));
     dialog.showModal();
     byId('confirm').onclick = async () => {
@@ -396,7 +452,7 @@ function renderEntry(items, type) {
         pending = null;
         values.clear();
         paint();
-        message('Saved!');
+        message(label('saved','Saved!'));
       } catch (error) {
         failure(error);
       } finally {
@@ -411,7 +467,7 @@ function renderEntry(items, type) {
     const query = search.value.trim().toLowerCase();
     list.replaceChildren(...items.filter(item => item.name.toLowerCase().includes(query)).map(item => {
       const row = el('div', '', 'item');
-      const label = product(item.name, item.unit ? 'Unit: ' + item.unit : '', productIcon(item.name), item);
+      const itemName = product(item.name, readableUnit(item.unit), productIcon(item.name), item);
       const input = el('input');
       input.type = 'number';
       input.inputMode = 'decimal';
@@ -430,7 +486,7 @@ function renderEntry(items, type) {
       plus.setAttribute('aria-label', 'Increase ' + item.name);
       const controls = el('div', '', 'stepper');
       controls.append(minus, input, plus);
-      row.append(label, controls);
+      row.append(itemName, controls);
       return row;
     }));
   }
@@ -461,9 +517,63 @@ async function thumbnail(file) {
   }
 }
 
+function interfaceSettings() {
+  const card = el('details', '', 'card');
+  card.id = 'interfaceSettings';
+  card.name = 'manage';
+  card.append(el('summary', 'Interface text'));
+  const fields = {
+    appName:'App name', factory:'Factory picker', signIn:'Sign-in button', adminSignIn:'Admin sign-in button',
+    signOut:'Sign-out button', username:'Username field', password:'Password field',
+    useNow:'Use menu', history:'History menu', home:'Home menu', stock:'Stock menu', manage:'Manage menu',
+    dashboard:'Dashboard title', buy:'Suggested Buy title', myHistory:'My history title',
+    teamHistory:'Team history title', receive:'Receive button', opening:'Opening stock button',
+    search:'Search field', save:'Save button', confirm:'Confirm button', cancel:'Cancel button',
+    saved:'Saved message', used:'Used label', received:'Received label', onHand:'Stock quantity label',
+    noItems:'Empty item list', noHistory:'Empty history'
+  };
+  const form = el('form');
+  const grid = el('div', '', 'label-grid');
+  form.append(el('p', 'Leave a field blank to use the default.', 'muted'), grid);
+  for (const [key, title] of Object.entries(fields)) {
+    const wrapper = el('label', title);
+    const input = el('input');
+    input.name = key;
+    input.maxLength = 80;
+    input.value = wording.overrides[key] ?? '';
+    input.placeholder = wording.defaults[key] ?? '';
+    wrapper.append(input);
+    grid.append(wrapper);
+  }
+  const save = el('button', label('save','Save'), 'primary');
+  form.append(save);
+  card.append(form);
+  form.onsubmit = async event => {
+    event.preventDefault();
+    save.disabled = true;
+    const currentAccount = account;
+    try {
+      const result = await rpc('saveInterfaceText', Object.fromEntries(new FormData(form)));
+      if (account !== currentAccount) return;
+      applyWording(result);
+      if (current === 'Manage') {
+        await openPage('Manage');
+        if (account === currentAccount && byId('interfaceSettings')) byId('interfaceSettings').open = true;
+      }
+      if (account === currentAccount) message(label('saved','Saved!'));
+    } catch (error) {
+      if (account === currentAccount) failure(error);
+    } finally {
+      save.disabled = false;
+    }
+  };
+  return card;
+}
+
 function renderCatalog(data) {
   const kinds = {FACTORIES:'Factories', ITEMS:'Items', USERS:'User accounts'};
   for (const [kind, title] of Object.entries(kinds)) {
+    if (kind === 'USERS') page.append(interfaceSettings());
     const card = el('details', '', 'card');
     card.name = 'manage';
     const editor = el('div');
@@ -557,7 +667,7 @@ function renderCatalog(data) {
         }
       }
       field('active','Active','checkbox',row.active ?? true);
-      const save = el('button','Save','primary');
+      const save = el('button',label('save','Save'),'primary');
       form.append(save);
       form.onsubmit = async event => {
         event.preventDefault();
@@ -597,7 +707,7 @@ function renderCatalog(data) {
             populate(next);
           }
           await openPage('Manage');
-          message('Saved!');
+          message(label('saved','Saved!'));
         } catch (error) {
           failure(error);
         } finally {
@@ -657,6 +767,7 @@ function loggedOut(text = '') {
   message(text, Boolean(text));
 }
 async function enter() {
+  await wordingReady;
   populate(await rpc('start'));
   byId('login').hidden = true;
   byId('signOut').hidden = false;
