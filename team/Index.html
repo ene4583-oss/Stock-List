@@ -16,6 +16,7 @@
     .thumb{width:52px;height:52px;overflow:hidden}
     .thumb img{width:100%;height:100%;object-fit:cover}
     .stock-number{flex:none;text-align:right}.stock-number strong{font-size:1.35rem;display:block}
+    .delete-record{min-height:44px;font-size:.85rem}
     .movement{display:block;font-weight:650}.record-info{color:var(--muted)}
     .record-info summary{padding:.35rem 0;min-height:44px;font-size:.8rem}
     .label-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(13rem,1fr));gap:0 .9rem}
@@ -520,14 +521,14 @@ function renderHistory(records) {
     if (record.before !== undefined) {
       const details = el('details', '', 'record-info');
       details.append(el('summary','Stock change'), el('small', String(record.before) + ' → ' + String(record.after)));
-      if (record.deleteId) {
-        const remove = button('Delete record', async () => {
-          if (!window.confirm('Delete this record and reverse its stock change?')) return;
-          await removeEntry(remove, 'deleteStockRecord', [record.deleteId], current);
-        }, 'danger');
-        details.append(remove);
-      }
       info.append(details);
+    }
+    if (record.deleteId) {
+      const remove = button('Delete record', async () => {
+        if (!window.confirm('Delete this record and reverse its stock change?')) return;
+        await removeEntry(remove, 'deleteStockRecord', [record.deleteId], current);
+      }, 'danger delete-record');
+      info.append(remove);
     }
     row.append(info);
     list.append(row);
